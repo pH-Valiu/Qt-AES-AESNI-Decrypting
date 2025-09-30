@@ -35,8 +35,5 @@ SOURCES += main.cpp \
     qaesencryption.cpp \
     unit_test/aestest.cpp
 
-DISTFILES += \
-    unit_test/longText.txt
-
 RESOURCES += \
     res.qrc
