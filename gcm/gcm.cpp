@@ -51,6 +51,51 @@ __m128i gfmul(__m128i a, __m128i b){
     return gfmul(a,b, q);
 }
 
+
+/*
+ * Please note: We use the Symbol "GFMUL" to refer to "Carry-Less-Multiply-And-Reduce",
+ *  while Intel Doc. B uses "*" to refer to "Carry-Less-Multiply-And-Reduce".
+ * Meanwhile, we use "CLMUL" to refer to just "Carry-Less-Multiply",
+ *  while Intel Doc. B uses "GFMUL64" to refer to just "Carry-Less-Multiply".
+ * --> Note the similarity but difference between "GFMUL" and "GFMUL64".
+ *
+ * Meanwhile, Intel Doc. A mostly uses "\cdot" to refer to "Carry-Less-Multiply" and ("*" or "GFMUL128") to refer to "Carry-Less-Multiply-And-Reduce"
+ */
+/**
+ * @brief gfmul_k_optimized This should only be used when we have b input directly from powers of H.
+ * So, as a standalone, internally, another gfmul() call is issued. --> Per se: Bad
+ * @param a
+ * @param b
+ * @return
+ */
+__m128i gfmul_k_optimized(__m128i a, __m128i b, __m128i q){
+    // Step 0: Pre-requesites
+    __m128i k = _mm_xor_si128(gfmul(_mm_srli_si128(b, 8), q, q), _mm_slli_si128(b, 8));     // K = GFMUL(B[1], Q) + B[0]*x^64
+
+    // Step 1: Multiply
+    __m128i a0b0 = _mm_clmulepi64_si128(a, b, 0x00);
+    __m128i a0b1 = _mm_clmulepi64_si128(a, b, 0x10);
+    __m128i a1k0 = _mm_clmulepi64_si128(a, k, 0x01);
+    __m128i a1k1 = _mm_clmulepi64_si128(a, k, 0x11);
+
+    __m128i lower  = _mm_xor_si128(a0b0, a1k0);     // computes lower  = a0b0 + a1k0
+    __m128i higher = _mm_xor_si128(a0b1, a1k1);     // computes higher = a0b1 + a1k1
+
+    __m128i c01 = _mm_xor_si128(lower, _mm_slli_si128(higher, 8));  // c01 = lower + (higher << 64)
+    __m128i c23 = _mm_srli_si128(higher, 8);                        // c02 = higher >> 64           (highest 64 bits are 0)
+
+    // Step 2: Reduce
+    __m128i x = _mm_clmulepi64_si128(c23, q, 0x00);
+    c01 = _mm_xor_si128(x, c01);
+
+    return c01;
+}
+
+__m128i gfmul_k_optimized(__m128i a, __m128i b){
+    __m128i q = _mm_set_epi32(0, 0, 0, 0x00000087); //0x87 is 10000111 being x^7 + x^2 + x + 1
+    return gfmul_k_optimized(a, b, q);
+}
+
 __m128i bitshift_left(__m128i a, unsigned char count){
     __m128i carry = _mm_slli_si128(a, 8);   // old compilers only have the confusingly named _mm_slli_si128 synonym
     if (count >= 64)
@@ -87,18 +132,24 @@ QString print128_hex_lanes(__m128i var)
 
 void gfmul_test(){
     qInfo() << "hasSSSE3?: " << hasSSSE3();
-    /* Test vektoren (TEST 1 - nach Intel Doc 2014 - Page 78 "Intel Carry-Less Multiplication Instruction and its Usage for Computing in GCM mode"):
+    /* Test vektoren (TEST 1 - nach Intel Doc 2014 - Page 78 in Doc A.: "Intel Carry-Less Multiplication Instruction and its Usage for Computing in GCM mode"):
     / a: 7b5b5465 73745665 63746f72 5d53475d
     / b: 48692853 68617929 5b477565 726f6e5d
     / q: 00000000 00000000 00000000 00000087
-    / assert: GFMUL(a,b,q) = 040229a0 9a5ed12e 7e4e10da 323506d2
+    / assert: GFMUL(a,b,q) = c = 040229a0 9a5ed12e 7e4e10da 323506d2
     */
     __m128i a = _mm_set_epi32(0x7b5b5465, 0x73745665, 0x63746f72, 0x5d53475d);
     __m128i b = _mm_set_epi32(0x48692853, 0x68617929, 0x5b477565, 0x726f6e5d);
+    __m128i res_assert = _mm_set_epi32(0x040229a0, 0x9a5ed12e, 0x7e4e10da, 0x323506d2);
     __m128i q = _mm_set_epi32(0x00000000, 0x00000000, 0x00000000, 0x00000087);
     qInfo() << "a: "<<print128_hex_lanes(a)<<", b: "<<print128_hex_lanes(b);
-    __m128i res = gfmul(a,b,q);
+    __m128i res = gfmul_k_optimized(a,b,q);
     qInfo() << "res: (a, b, q):\n|>"<<print128_hex_lanes(res)<<"\n";
+    if(_mm_test_all_zeros(_mm_set_epi32(0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff), _mm_xor_si128(res_assert, res))) {
+        qInfo() << "Assertion (res == res_assert): holds true!";
+    } else {
+        qWarning() << "Assertion (res == res_assert): is false!";
+    }
 
 
     /* Test vektoren (TEST 2 - nach Intel Doc 2014 - Page 78 "...")
@@ -109,13 +160,14 @@ void gfmul_test(){
     / b_refl: 860f0c1fa9ff53ffc0db81b7b2fd65fb
     / assert: GFMUL(a_refl,b_refl,q) = c = 65B7FC3340123F26DDAA34B50D7CA5B
     / assert: c_refl = da53eb0ad2c55bb64fc4802cc3feda60
-    / => In order for this to work, q must be q and must not be q_refl
+    / => In order for this to work, q must be q and must not be q_refl (this could also be due to us using a multiply&reduce routine different from Doc A.)
     */
     a = _mm_set_epi32(0x952b2a56, 0xa5604ac0, 0xb32b6656, 0xa05b40b6);
     b = _mm_set_epi32(0xdfa6bf4d, 0xed81db03, 0xffcaff95, 0xf830f061);
     q = _mm_set_epi32(0x00000000, 0x00000000, 0x00000000, 0x00000087);
     __m128i a_refl = reflect_xmm(a);
     __m128i b_refl = reflect_xmm(b);
+    __m128i c_refl_assert = _mm_set_epi32(0xda53eb0a, 0xd2c55bb6, 0x4fc4802c, 0xc3feda60);
     qInfo() << "a: "<<print128_hex_lanes(a)<<", b: "<<print128_hex_lanes(b);
     qInfo() << "a_refl: "<<print128_hex_lanes(a_refl)<<", b_refl: "<<print128_hex_lanes(b_refl);
     //qInfo() << "q_refl: "<<print128_hex_lanes(q_refl);
@@ -124,6 +176,12 @@ void gfmul_test(){
 
     qInfo() << "c: (a_refl, b_refl, q): \n|>"<<print128_hex_lanes(c);
     qInfo() << "c_refl: \n|>"<<print128_hex_lanes(c_refl);
+    if(_mm_test_all_zeros(_mm_set_epi32(0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff), _mm_xor_si128(c_refl_assert, c_refl))) {
+        qInfo() << "Assertion (c_refl == c_refl_assert): holds true!";
+    } else {
+        qWarning() << "Assertion (c_refl == c_refl_assert): is false!";
+    }
+
 
 }
 
