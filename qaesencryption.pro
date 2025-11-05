@@ -16,7 +16,10 @@ TEMPLATE = app
 DEFINES += QT_DEPRECATED_WARNINGS
 
 DEFINES += USE_INTEL_AES_IF_AVAILABLE
-QMAKE_CXXFLAGS += -maes
+QMAKE_CXXFLAGS += \
+    -maes \
+    -mssse3 \
+    -march=native       # this is quick include isntead of mssse2 & mssse3 TODO refine this for release
 
 # You can also make your code fail to compile if you use deprecated APIs.
 # In order to do so, uncomment the following line.
@@ -25,6 +28,7 @@ QMAKE_CXXFLAGS += -maes
 
 HEADERS += \
     aesni/aesni-key-init.h \
+    gcm/gcm.h \
     qaesencryption.h \
     aesni/aesni-key-exp.h \
     aesni/aesni-enc-ecb.h \
@@ -32,6 +36,7 @@ HEADERS += \
     unit_test/aestest.h
 
 SOURCES += main.cpp \
+    gcm/gcm.cpp \
     qaesencryption.cpp \
     unit_test/aestest.cpp
 
