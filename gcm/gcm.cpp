@@ -2,6 +2,11 @@
 #include <QDebug>
 #include <QString>
 
+/**
+ * @brief reflect_xmm code from Intel Doc. A
+ * @param X
+ * @return
+ */
 __m128i reflect_xmm(__m128i X){
     __m128i tmp1,tmp2;
     __m128i AND_MASK =
@@ -96,6 +101,39 @@ __m128i gfmul_k_optimized(__m128i a, __m128i b){
     return gfmul_k_optimized(a, b, q);
 }
 
+struct int256{
+    __m128i t10;
+    __m128i t32;
+};
+
+/*
+ * Testing code:
+ *  __m128i x1 = _mm_set_epi32(0x00000000, 0x00000010, 0x00000000, 0x00000010);
+    __m128i x2 = _mm_set_epi32(0x00000000, 0x00000020, 0x00000000, 0x00000020);
+    struct int256 xRet = bitshift_left256(x2, x1, 3);
+    qInfo() <<"[x2,x1] << 3: "<<print128_hex_lanes(xRet.t32)<<" "<<print128_hex_lanes(xRet.t10);
+    xRet = bitshift_left256(x2, x1, 65);
+    qInfo() <<"[x2,x1] << 65: "<<print128_hex_lanes(xRet.t32)<<" "<<print128_hex_lanes(xRet.t10);
+
+ *
+ *
+ */
+struct int256 bitshift_left256(__m128i i32, __m128i i10, unsigned char count){
+    struct int256 ret;
+    if (count >= 128){
+        ret.t10 = _mm_setzero_si128();
+        ret.t32 = bitshift_left(i10, count-128);
+        return ret;
+    }
+    // else
+    __m128i carry = bitshift_right(i10, 128-count);
+    ret.t10 = bitshift_left(i10, count);
+    ret.t32 = _mm_or_si128(bitshift_left(i32, count), carry);
+
+    return ret;
+}
+
+
 __m128i bitshift_left(__m128i a, unsigned char count){
     __m128i carry = _mm_slli_si128(a, 8);   // old compilers only have the confusingly named _mm_slli_si128 synonym
     if (count >= 64)
@@ -104,6 +142,18 @@ __m128i bitshift_left(__m128i a, unsigned char count){
     carry = _mm_srli_epi64(carry, 64-count);  // After bslli shifted left by 64b
 
     a = _mm_slli_epi64(a, count);
+    return _mm_or_si128(a, carry);
+}
+
+__m128i bitshift_right(__m128i a, unsigned char count){
+    __m128i carry = _mm_srli_si128(a, 8);
+    if (count >= 64){
+        return _mm_srli_epi64(carry, count-64);
+    }
+    //else
+    carry = _mm_slli_epi64(carry, 64-count);
+
+    a = _mm_srli_epi64(a, count);
     return _mm_or_si128(a, carry);
 }
 
@@ -171,7 +221,7 @@ void gfmul_test(){
     qInfo() << "a: "<<print128_hex_lanes(a)<<", b: "<<print128_hex_lanes(b);
     qInfo() << "a_refl: "<<print128_hex_lanes(a_refl)<<", b_refl: "<<print128_hex_lanes(b_refl);
     //qInfo() << "q_refl: "<<print128_hex_lanes(q_refl);
-    __m128i c = gfmul(a_refl, b_refl, q);
+    __m128i c = gfmul_k_optimized(a_refl, b_refl, q);       // <<< switch here between gfmul and gfmul_k_optimized
     __m128i c_refl = reflect_xmm(c);
 
     qInfo() << "c: (a_refl, b_refl, q): \n|>"<<print128_hex_lanes(c);
@@ -181,6 +231,8 @@ void gfmul_test(){
     } else {
         qWarning() << "Assertion (c_refl == c_refl_assert): is false!";
     }
+
+
 
 
 }

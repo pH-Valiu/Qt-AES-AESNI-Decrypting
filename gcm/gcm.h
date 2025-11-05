@@ -26,7 +26,8 @@ __m128i reflect_xmm(__m128i X);
 void encrypt();
 __m128i gfmul(__m128i a, __m128i b);
 __m128i gfmul(__m128i a, __m128i b, __m128i q);
-__m128i bitshift_left(__m128i a, __m128i count);
+__m128i bitshift_left(__m128i a, unsigned char count);
+__m128i bitshift_right(__m128i a, unsigned char count);
 void gfmul_test();
 
 #endif // GCM_H
