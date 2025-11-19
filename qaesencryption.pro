@@ -28,6 +28,7 @@ QMAKE_CXXFLAGS += \
 
 HEADERS += \
     aesni/aesni-key-init.h \
+    gcm/benchmarkutil.h \
     gcm/gcm.h \
     qaesencryption.h \
     aesni/aesni-key-exp.h \

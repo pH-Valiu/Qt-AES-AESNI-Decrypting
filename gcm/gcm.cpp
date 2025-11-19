@@ -214,8 +214,49 @@ __m128i gfmul_reversed(__m128i a, __m128i b){
     c23 = _mm_xor_si128(c23, _mm_and_si128(c01, _mm_set_epi64x(-1, 0)));  // add C[1] on higher C[3:2] (zeroing out C[0])
 
     return c23;
+}
+
+__m128i gfmul_reversed_bl_opt(__m128i a, __m128i b){
+    __m128i q = _mm_set_epi32(0, 0, 0xc2000000, 0);
+
+    // Step 1: Multiply
+    __m128i a0b0 = _mm_clmulepi64_si128(a, b, 0x00);
+    __m128i a0b1 = _mm_clmulepi64_si128(a, b, 0x10);
+    __m128i a1b0 = _mm_clmulepi64_si128(a, b, 0x01);
+    __m128i a1b1 = _mm_clmulepi64_si128(a, b, 0x11);
+
+    __m128i mid = _mm_xor_si128(a0b1, a1b0);      // computes mid = A0B1 + A1B0
+
+    __m128i c01 = _mm_xor_si128(a0b0, _mm_slli_si128(mid, 8));    // computes C[1:0] = A0B0 + (mid << x^64)
+    __m128i c23 = _mm_xor_si128(a1b1, _mm_srli_si128(mid, 8));    // computes C[3:2] = A1B1 + (mid >> x^64)
+
+    // Step 1.1: Bitshift << 1
+    __m128i tmp7,tmp8,tmp9;
+    tmp7 = _mm_srli_epi32(c01, 31);
+    tmp8 = _mm_srli_epi32(c23, 31);
+    c01 = _mm_slli_epi32(c01, 1);
+    c23 = _mm_slli_epi32(c23, 1);
+    tmp9 = _mm_srli_si128(tmp7, 12);
+    tmp8 = _mm_slli_si128(tmp8, 4);
+    tmp7 = _mm_slli_si128(tmp7, 4);
+    c01 = _mm_or_si128(c01, tmp7);
+    c23 = _mm_or_si128(c23, tmp8);
+    c23 = _mm_or_si128(c23, tmp9);
 
 
+    // Step 2.1: Reduce
+    __m128i x = _mm_clmulepi64_si128(c01, q, 0x00);
+    c23 = _mm_xor_si128(c23, _mm_srli_si128(x, 8));       // add higher half of x (X[1]) to lower part of C[3:2]
+    c23 = _mm_xor_si128(c23, _mm_and_si128(c01, _mm_set_epi64x(0, -1))); // add only C[0] to lower part of C[3:2]  (zeroing out C[1])
+
+    c01 = _mm_xor_si128(c01, _mm_slli_si128(x, 8));       // add lower half of x (X[0]) to upper part of C[1:0]
+
+    // Step 2.2: Reduce
+    x = _mm_clmulepi64_si128(c01, q, 0x01);               // computes C[1] * Q = higher(C[1:0]) * lower(Q)
+    c23 = _mm_xor_si128(c23, x);                          // add full X on C[3:2]
+    c23 = _mm_xor_si128(c23, _mm_and_si128(c01, _mm_set_epi64x(-1, 0)));  // add C[1] on higher C[3:2] (zeroing out C[0])
+
+    return c23;
 }
 
 __m128i gfmul_docA(__m128i a, __m128i b){
@@ -341,6 +382,84 @@ __m128i gfmul_original_docA (__m128i a, __m128i b){
     return tmp6;
 }
 
+__m128i gfmul_original_docA_mod(__m128i a, __m128i b){
+    __m128i tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7, tmp8, tmp9;
+    tmp3 = _mm_clmulepi64_si128(a, b, 0x00);
+    tmp4 = _mm_clmulepi64_si128(a, b, 0x10);
+    tmp5 = _mm_clmulepi64_si128(a, b, 0x01);
+    tmp6 = _mm_clmulepi64_si128(a, b, 0x11);
+    tmp4 = _mm_xor_si128(tmp4, tmp5);
+    tmp5 = _mm_slli_si128(tmp4, 8);
+    tmp4 = _mm_srli_si128(tmp4, 8);
+    tmp3 = _mm_xor_si128(tmp3, tmp5);
+    tmp6 = _mm_xor_si128(tmp6, tmp4);
+
+    struct int256 bsl = bitshift_left256(tmp6, tmp3, 1);
+    tmp6 = bsl.t32;
+    tmp3 = bsl.t10;
+
+
+    tmp7 = _mm_slli_epi32(tmp3, 31);
+    tmp8 = _mm_slli_epi32(tmp3, 30);
+    tmp9 = _mm_slli_epi32(tmp3, 25);
+    tmp7 = _mm_xor_si128(tmp7, tmp8);
+    tmp7 = _mm_xor_si128(tmp7, tmp9);
+    tmp8 = _mm_srli_si128(tmp7, 4);
+    tmp7 = _mm_slli_si128(tmp7, 12);
+    tmp3 = _mm_xor_si128(tmp3, tmp7);
+    tmp2 = _mm_srli_epi32(tmp3, 1);
+    tmp4 = _mm_srli_epi32(tmp3, 2);
+    tmp5 = _mm_srli_epi32(tmp3, 7);
+    tmp2 = _mm_xor_si128(tmp2, tmp4);
+    tmp2 = _mm_xor_si128(tmp2, tmp5);
+    tmp2 = _mm_xor_si128(tmp2, tmp8);
+    tmp3 = _mm_xor_si128(tmp3, tmp2);
+    tmp6 = _mm_xor_si128(tmp6, tmp3);
+
+    return tmp6;
+}
+
+__m128i gfmul_original_docA_raw(__m128i a, __m128i b){
+    __m128i tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7, tmp8, tmp9;
+    tmp3 = _mm_clmulepi64_si128(a, b, 0x00);
+    tmp4 = _mm_clmulepi64_si128(a, b, 0x10);
+    tmp5 = _mm_clmulepi64_si128(a, b, 0x01);
+    tmp6 = _mm_clmulepi64_si128(a, b, 0x11);
+    tmp4 = _mm_xor_si128(tmp4, tmp5);
+    tmp5 = _mm_slli_si128(tmp4, 8);
+    tmp4 = _mm_srli_si128(tmp4, 8);
+    tmp3 = _mm_xor_si128(tmp3, tmp5);
+    tmp6 = _mm_xor_si128(tmp6, tmp4);
+    tmp7 = _mm_srli_epi32(tmp3, 31);
+    tmp8 = _mm_srli_epi32(tmp6, 31);
+    tmp3 = _mm_slli_epi32(tmp3, 1);
+    tmp6 = _mm_slli_epi32(tmp6, 1);
+    tmp9 = _mm_srli_si128(tmp7, 12);
+    tmp8 = _mm_slli_si128(tmp8, 4);
+    tmp7 = _mm_slli_si128(tmp7, 4);
+    tmp3 = _mm_or_si128(tmp3, tmp7);
+    tmp6 = _mm_or_si128(tmp6, tmp8);
+    tmp6 = _mm_or_si128(tmp6, tmp9);
+    tmp7 = _mm_slli_epi32(tmp3, 31);
+    tmp8 = _mm_slli_epi32(tmp3, 30);
+    tmp9 = _mm_slli_epi32(tmp3, 25);
+    tmp7 = _mm_xor_si128(tmp7, tmp8);
+    tmp7 = _mm_xor_si128(tmp7, tmp9);
+    tmp8 = _mm_srli_si128(tmp7, 4);
+    tmp7 = _mm_slli_si128(tmp7, 12);
+    tmp3 = _mm_xor_si128(tmp3, tmp7);
+    tmp2 = _mm_srli_epi32(tmp3, 1);
+    tmp4 = _mm_srli_epi32(tmp3, 2);
+    tmp5 = _mm_srli_epi32(tmp3, 7);
+    tmp2 = _mm_xor_si128(tmp2, tmp4);
+    tmp2 = _mm_xor_si128(tmp2, tmp5);
+    tmp2 = _mm_xor_si128(tmp2, tmp8);
+    tmp3 = _mm_xor_si128(tmp3, tmp2);
+    tmp6 = _mm_xor_si128(tmp6, tmp3);
+
+    return tmp6;
+}
+
 
 /*
  * Testing code:
@@ -350,8 +469,6 @@ __m128i gfmul_original_docA (__m128i a, __m128i b){
     qInfo() <<"[x2,x1] << 3: "<<print128_hex_lanes(xRet.t32)<<" "<<print128_hex_lanes(xRet.t10);
     xRet = bitshift_left256(x2, x1, 65);
     qInfo() <<"[x2,x1] << 65: "<<print128_hex_lanes(xRet.t32)<<" "<<print128_hex_lanes(xRet.t10);
-
- *
  *
  */
 struct int256 bitshift_left256(__m128i i32, __m128i i10, unsigned char count){
@@ -429,6 +546,8 @@ QString print256_hex_lanes(struct int256 var)
     return s;
 }
 
+#include <QElapsedTimer>
+#include "gcm/benchmarkutil.h"
 void gfmul_test(){
     qInfo() << "hasSSSE3?: " << hasSSSE3();
     /* Test vektoren (TEST 1 - nach Intel Doc 2014 - Page 78 in Doc A.: "Intel Carry-Less Multiplication Instruction and its Usage for Computing in GCM mode"):
@@ -516,6 +635,16 @@ void gfmul_test(){
         qWarning() << "Assertion (res == res_assert): is false!";
     }
     qInfo("\n");
+
+
+    /**
+     * Timing test to identify whether DocA or DocB algo is better
+     *
+     */
+    BenchmarkUtil::run("DocA-raw", gfmul_original_docA_raw, a, b);
+    BenchmarkUtil::run("DocA-mod", gfmul_original_docA_mod, a, b);
+    BenchmarkUtil::run("DocB", gfmul_reversed, a, b);
+    BenchmarkUtil::run("DocB-BlOpt", gfmul_reversed_bl_opt, a, b);
 
 
     /*
