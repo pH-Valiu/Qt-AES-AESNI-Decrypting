@@ -26,6 +26,15 @@ __m128i reflect_xmm(__m128i X){
     return _mm_shuffle_epi8(tmp1, BSWAP_MASK);
 };
 
+struct int256 reflect_ymm(struct int256 X){
+    struct int256 R;
+
+    R.t10 = reflect_xmm(X.t32);
+    R.t32 = reflect_xmm(X.t10);
+
+    return R;
+}
+
 __m128i gfmul(__m128i a, __m128i b, __m128i q){
     // Step 1: Multiply
     __m128i a0b0 = _mm_clmulepi64_si128(a, b, 0x00);
@@ -137,11 +146,279 @@ __m128i gfmul_k_optimized_reversed(__m128i a, __m128i b){
     return gfmul_k_optimized_reversed(a, b, q);
 }
 
+struct int256 clmul(__m128i a, __m128i b){
+    // Step 1: Multiply
+    __m128i a0b0 = _mm_clmulepi64_si128(a, b, 0x00);
+    __m128i a0b1 = _mm_clmulepi64_si128(a, b, 0x10);
+    __m128i a1b0 = _mm_clmulepi64_si128(a, b, 0x01);
+    __m128i a1b1 = _mm_clmulepi64_si128(a, b, 0x11);
 
-struct int256{
-    __m128i t10;
-    __m128i t32;
-};
+    __m128i mid = _mm_xor_si128(a0b1, a1b0); // computes mid = A0B1 + A1B0
+
+    __m128i c01 = _mm_xor_si128(a0b0, _mm_slli_si128(mid, 8)); // computes C[1:0] = A0B0 + (mid << x^64)
+    __m128i c23 = _mm_xor_si128(a1b1, _mm_srli_si128(mid, 8)); // computes C[3:2] = A1B1 + (mid >> x^64)
+
+    return {c01, c23};
+}
+
+__m128i gfmul_reversed_corrected(__m128i a, __m128i b, __m128i q){
+    // Step 0: Pre-requesites
+    __m128i aShifted = bitshift_left(a, 1);
+    __m128i q_refl = reflect_xmm(q);
+
+    // Step 1: Multiply
+    __m128i a0b0 = _mm_clmulepi64_si128(aShifted, b, 0x00);
+    __m128i a0b1 = _mm_clmulepi64_si128(aShifted, b, 0x10);
+    __m128i a1b0 = _mm_clmulepi64_si128(aShifted, b, 0x01);
+    __m128i a1b1 = _mm_clmulepi64_si128(aShifted, b, 0x11);
+
+    __m128i mid = _mm_xor_si128(a0b1, a1b0); // computes mid = A0B1 + A1B0
+
+    __m128i c01 = _mm_xor_si128(a0b0, _mm_slli_si128(mid, 8)); // computes C[1:0] = A0B0 + (mid << x^64)
+    __m128i c23 = _mm_xor_si128(a1b1, _mm_srli_si128(mid, 8)); // computes C[3:2] = A1B1 + (mid >> x^64)
+
+    // Step 2.1: Reduce
+    __m128i x = _mm_clmulepi64_si128(a1b1, q, 0x01);  // computes C[3] * Q = upper(A1B1) * lower(Q) TODO might be wrong->0x00
+    c01 = _mm_xor_si128(c01, _mm_slli_si128(x, 8)); // add lower half of x (X[0]) to upper part of C[1:0]
+    c23 = _mm_xor_si128(c23, _mm_srli_si128(x, 8)); // add higher half of x (X[1]) to lower part of C[3:2] (higher part is just dangling around)
+
+    // Step 2.2: Reduce
+    x = _mm_clmulepi64_si128(c23, q, 0x00);         // works because higher part is not used in the calculation
+    c01 = _mm_xor_si128(c01, x);
+
+    return c01;
+}
+
+
+/**
+ * This is not working correclty but left for insights
+ * @brief gfmul_reversed
+ * @param a
+ * @param b
+ * @return
+ */
+__m128i gfmul_reversed(__m128i a, __m128i b){
+    __m128i a_refl = bitshift_left(a, 1);
+    __m128i b_refl = b;
+
+
+    // New insight?
+    // calc CLMUL(a,b)
+    // shift one to left
+    // now apply reductions from the right to left (using q or q_refl_64?)
+    // result is in [X3:X2]
+
+    //__m128i q_refl = q;
+    //__m128i q_refl = _mm_set_epi32(0, 0, 0xe1000000, 0);        // this is reflect_64(Q)
+    __m128i q_refl = _mm_set_epi32(0, 0, 0xc2000000, 0);        // this is reflect_64(Q >> 1)
+
+    // Step 1: Multiply
+    __m128i a0b0_refl = _mm_clmulepi64_si128(a_refl, b_refl, 0x00);
+    __m128i a0b1_refl = _mm_clmulepi64_si128(a_refl, b_refl, 0x10);
+    __m128i a1b0_refl = _mm_clmulepi64_si128(a_refl, b_refl, 0x01);
+    __m128i a1b1_refl = _mm_clmulepi64_si128(a_refl, b_refl, 0x11);
+
+    __m128i mid = _mm_xor_si128(a0b1_refl, a1b0_refl);      // computes mid = A0B1' + A1B0'
+
+    __m128i c01_refl = _mm_xor_si128(a0b0_refl, _mm_slli_si128(mid, 8));    // computes C'[1:0] = A0B0' + (mid << x^64)
+    __m128i c23_refl = _mm_xor_si128(a1b1_refl, _mm_srli_si128(mid, 8));    // computes C'[3:2] = A1B1' + (mid >> x^64)
+
+    // Step 1.5: Now reflect to get C'?
+
+    struct int256 t = reflect_ymm({c01_refl, c23_refl});
+    c01_refl = t.t10;
+    c23_refl = t.t32;
+
+
+    // Step 2.1: Reduce
+    __m128i x = _mm_clmulepi64_si128(c01_refl, q_refl, 0x00);      // computes C'[0] * Q' = lower(A0B0') * lower(Q')
+    c23_refl = _mm_xor_si128(c23_refl, _mm_srli_si128(x, 8));       // add higher half of x (X[1]) to lower part of C'[3:2]
+    c23_refl = _mm_xor_si128(c23_refl, _mm_and_si128(c01_refl, _mm_set_epi64x(0, -1))); // add only C'[0] to lower part of C'[3:2]  (zeroing out C'[1])
+
+    c01_refl = _mm_xor_si128(c01_refl, _mm_slli_si128(x, 8));       // add lower half of x (X[0]) to upper part of C'[1:0]
+
+    // Step 2.2: Reduce
+    x = _mm_clmulepi64_si128(c01_refl, q_refl, 0x01);               // computes C'[1] * Q' = higher(C'[1:0]) * lower(Q')
+    c23_refl = _mm_xor_si128(c23_refl, x);                          // add full X on C'[3:2]
+    c23_refl = _mm_xor_si128(c23_refl, _mm_and_si128(c01_refl, _mm_set_epi64x(-1, 0)));  // add C'[1] on higher C'[3:2] (zeroing out C'[0])
+
+    return c23_refl;
+}
+
+/**
+ * This approach follows the idea of combining the insight from Intel Doc. A which tries to get around using reflected operandi with the reduction method described in Doc. B
+ * For this approach, we thus utilize the identity:
+ * CLMUL(A', B') = CLMUL(A,B)' >> 1 = (CLMUL(A,B) << 1)' = CLMUL(A<<1, B)'
+ *
+ * 1. Compute CLMUL(A<<1, B)
+ * 2. Reduce with Q or Q' (treated as 64bit) following the Doc. B approach
+ *
+ * The returned value does not need to be reflected but instead immediately representes the correct output as if we had done:
+ * OUT = (CLMUL(A', B'))' = (OUT')' = OUT
+ * @brief gfmul_idea
+ * @param a
+ * @param b
+ * @return
+ */
+__m128i gfmul_idea(__m128i a, __m128i b){
+    __m128i a_l1 = bitshift_left(a, 1);
+    __m128i q1 = _mm_set_epi32(0, 0, 0xc2000000, 0);
+    __m128i q2 = _mm_set_epi32(0, 0, 0, 0x00000087);
+
+    // Step 1: Multiply
+    __m128i a0b0 = _mm_clmulepi64_si128(a_l1, b, 0x00);
+    __m128i a0b1 = _mm_clmulepi64_si128(a_l1, b, 0x10);
+    __m128i a1b0 = _mm_clmulepi64_si128(a_l1, b, 0x01);
+    __m128i a1b1 = _mm_clmulepi64_si128(a_l1, b, 0x11);
+
+    __m128i mid = _mm_xor_si128(a0b1, a1b0);      // computes mid = A0B1 + A1B0
+
+    __m128i c01 = _mm_xor_si128(a0b0, _mm_slli_si128(mid, 8));    // computes C[1:0] = A0B0 + (mid << x^64)
+    __m128i c23 = _mm_xor_si128(a1b1, _mm_srli_si128(mid, 8));    // computes C[3:2] = A1B1 + (mid >> x^64)
+
+
+    // Step 2.1: Reduce
+    __m128i x = _mm_clmulepi64_si128(c01, q1, 0x00);      // computes C[0] * Q1 = lower(A0B0) * lower(Q1)
+    c01 = _mm_xor_si128(c01, x);                          // computes C[1:0] + X[1:0]
+
+    // Step 2.2: Reduce
+    x = _mm_clmulepi64_si128(c01, q2, 0x01);            // computes C[1] * Q2 = higher(C[1:0]) * lower(Q2)
+    c23 = _mm_xor_si128(c23, x);
+    return c23;
+    /*
+    c23 = _mm_xor_si128(c23, _mm_srli_si128(x, 8));       // add higher half of x (X[1]) to lower part of C[3:2]
+    c23 = _mm_xor_si128(c23, _mm_and_si128(c01, _mm_set_epi64x(0, -1))); // add only C[0] to lower part of C[3:2]  (zeroing out C[1])
+
+    c01 = _mm_xor_si128(c01, _mm_slli_si128(x, 8));       // add lower half of x (X[0]) to upper part of C[1:0]
+
+    // Step 2.2: Reduce
+    x = _mm_clmulepi64_si128(c01, q, 0x01);               // computes C[1] * Q = higher(C[1:0]) * lower(Q)
+    c23 = _mm_xor_si128(c23, x);                          // add full X on C[3:2]
+    c23 = _mm_xor_si128(c23, _mm_and_si128(c01, _mm_set_epi64x(-1, 0)));  // add C[1] on higher C[3:2] (zeroing out C[0])
+
+    return c23;
+    */
+
+}
+
+__m128i gfmul_docA(__m128i a, __m128i b){
+    __m128i a_l1 = bitshift_left(a, 1);
+
+    // Step 1: Multiply
+    __m128i a0b0 = _mm_clmulepi64_si128(a_l1, b, 0x00);
+    __m128i a0b1 = _mm_clmulepi64_si128(a_l1, b, 0x10);
+    __m128i a1b0 = _mm_clmulepi64_si128(a_l1, b, 0x01);
+    __m128i a1b1 = _mm_clmulepi64_si128(a_l1, b, 0x11);
+
+    __m128i mid = _mm_xor_si128(a0b1, a1b0);      // computes mid = A0B1 + A1B0
+
+    __m128i c01 = _mm_xor_si128(a0b0, _mm_slli_si128(mid, 8));    // computes C[1:0] = A0B0 + (mid << x^64)
+    __m128i c23 = _mm_xor_si128(a1b1, _mm_srli_si128(mid, 8));    // computes C[3:2] = A1B1 + (mid >> x^64)
+
+    quint64 x0 = _mm_cvtsi128_si64(c01);
+    quint64 x1 = _mm_cvtsi128_si64(_mm_srli_si128(c01, 8));
+    quint64 x2 = _mm_cvtsi128_si64(c23);
+    quint64 x3 = _mm_cvtsi128_si64(_mm_srli_si128(c23, 8));
+
+    quint64 ai = x0 << 63;
+    quint64 bi = x0 << 62;
+    quint64 ci = x0 << 57;
+
+    quint64 d = x1 ^ ai ^ bi ^ ci;
+
+    __m128i dx0 = _mm_set_epi64x(d, x0);
+    __m128i e10 = bitshift_right(dx0, 1);
+    __m128i f10 = bitshift_right(dx0, 2);
+    __m128i g10 = bitshift_right(dx0, 7);
+
+    quint64 e0 = _mm_cvtsi128_si64(e10);
+    quint64 e1 = _mm_cvtsi128_si64(_mm_srli_si128(e10, 8));
+    quint64 f0 = _mm_cvtsi128_si64(f10);
+    quint64 f1 = _mm_cvtsi128_si64(_mm_srli_si128(f10, 8));
+    quint64 g0 = _mm_cvtsi128_si64(g10);
+    quint64 g1 = _mm_cvtsi128_si64(_mm_srli_si128(g10, 8));
+
+    c23 = _mm_xor_si128(c23, dx0);
+    c23 = _mm_xor_si128(c23, e10);
+    c23 = _mm_xor_si128(c23, f10);
+    c23 = _mm_xor_si128(c23, g10);
+
+    return c23;
+}
+
+__m128i gfmul_original_docA (__m128i a, __m128i b){
+    __m128i tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7, tmp8, tmp9;
+
+    // Test: instead of doing C[3:0] << 1, we could simply do A<<1 before CLMUL(A<<1,B)
+    // --> Test result: NO! --> (CLMUL(A, B) << 1)' != (CLMUL(A<<1, B))'
+
+    __m128i a0b0 = _mm_clmulepi64_si128(a, b, 0x00);    //3
+    tmp3 = a0b0;
+    __m128i a0b1 = _mm_clmulepi64_si128(a, b, 0x10);    //4
+    tmp4 = a0b1;
+    __m128i a1b0 = _mm_clmulepi64_si128(a, b, 0x01);    //5
+    tmp5 = a1b0;
+    __m128i a1b1 = _mm_clmulepi64_si128(a, b, 0x11);    //6
+    tmp6 = a1b1;
+
+    __m128i mid  = _mm_xor_si128(a0b1, a1b0);           //4
+    tmp4 = mid;
+    __m128i c01 = _mm_xor_si128(a0b0, _mm_slli_si128(mid, 8));    //3
+    tmp3 = c01;
+    __m128i c23 = _mm_xor_si128(a1b1, _mm_srli_si128(mid, 8));    //6
+    tmp6 = c23;
+
+    __m128i c01_shiftR31_epi32 = _mm_srli_epi32(tmp3, 31);      // carry-out bit of c01 of each 32bit lane
+    tmp7 = c01_shiftR31_epi32;
+    __m128i c23_shiftR31_epi32 = _mm_srli_epi32(tmp6, 31);      // carry-out bit of c23 of each 32bit lane
+    tmp8 = c23_shiftR31_epi32;
+    __m128i c01_shiftL1_epi32 = _mm_slli_epi32(tmp3, 1);        // shift <<1 of c01 in each 32 bit lane
+    tmp3 = c01_shiftL1_epi32;
+    __m128i c23_shiftL1_epi32 = _mm_slli_epi32(tmp6, 1);        // shift <<1 of c23 in each 32 bit lane
+    tmp6 = c23_shiftL1_epi32;
+    __m128i c01_shiftR31_epi32_shiftR96_si128 = _mm_srli_si128(tmp7, 12);   // contains just the carry of c01 (e.g. the highest bit, but now at position 0)
+    tmp9 = c01_shiftR31_epi32_shiftR96_si128;
+    __m128i c23_shiftR31_epi32_shiftL32_si128 = _mm_slli_si128(tmp8, 4);    // contains just the carries of c23 (32bit lane) but offset by one lane to the left: e.g. epi32(0...0carry_2, 0...0carry_1, 0...0carry_0, 0...0) of c23
+    tmp8 = c23_shiftR31_epi32_shiftL32_si128;
+    __m128i c01_shiftR31_epi32_shiftL32_si128 = _mm_slli_si128(tmp7, 4);    // contains just the carries of c01 (32bit lane) but offset by one lane to the left: e.g. epi32(0...0carry_2, 0...0carry_1, 0...0carry_0, 0...0) of c01
+    tmp7 = c01_shiftR31_epi32_shiftL32_si128;
+
+    __m128i c01_shiftL1_epi32_OR_c01_shiftR31_epi32_shiftL32_si128 = _mm_or_si128(tmp3, tmp7);      // comined all of c01
+    tmp3 = c01_shiftL1_epi32_OR_c01_shiftR31_epi32_shiftL32_si128;
+    __m128i c23_shiftL1_epi32_OR_c23_shiftR31_epi32_shiftL32_si128 = _mm_or_si128(tmp6, tmp8);
+    tmp6 = c23_shiftL1_epi32_OR_c23_shiftR31_epi32_shiftL32_si128;
+    __m128i c23_shiftL1_epi32_OR_c23_shiftR31_epi32_shiftL32_si128_OR_c01_shiftR31_epi32_shiftR96_si128 = _mm_or_si128(tmp6, tmp9);
+    tmp6 = c23_shiftL1_epi32_OR_c23_shiftR31_epi32_shiftL32_si128_OR_c01_shiftR31_epi32_shiftR96_si128;
+
+    // All the above does simply [tmp6:tmp3] << 1 = C[3:0] << 1
+    // We have a command for that:
+    struct int256 ret = bitshift_left256(c23, c01, 1);
+    __m128i c23_sl1 = ret.t32;
+    __m128i c01_sl1 = ret.t10;
+    tmp6 = c23_sl1;
+    tmp3 = c01_sl1;
+
+
+    tmp7 = _mm_slli_epi32(tmp3, 31);
+    tmp8 = _mm_slli_epi32(tmp3, 30);
+    tmp9 = _mm_slli_epi32(tmp3, 25);
+    tmp7 = _mm_xor_si128(tmp7, tmp8);
+    tmp7 = _mm_xor_si128(tmp7, tmp9);
+    tmp8 = _mm_srli_si128(tmp7, 4);
+    tmp7 = _mm_slli_si128(tmp7, 12);
+    tmp3 = _mm_xor_si128(tmp3, tmp7);
+    tmp2 = _mm_srli_epi32(tmp3, 1);
+    tmp4 = _mm_srli_epi32(tmp3, 2);
+    tmp5 = _mm_srli_epi32(tmp3, 7);
+    tmp2 = _mm_xor_si128(tmp2, tmp4);
+    tmp2 = _mm_xor_si128(tmp2, tmp5);
+    tmp2 = _mm_xor_si128(tmp2, tmp8);
+    tmp3 = _mm_xor_si128(tmp3, tmp2);
+    tmp6 = _mm_xor_si128(tmp6, tmp3);
+
+    return tmp6;
+}
+
 
 /*
  * Testing code:
@@ -244,12 +521,13 @@ void gfmul_test(){
     __m128i q = _mm_set_epi32(0x00000000, 0x00000000, 0x00000000, 0x00000087);
     qInfo() << "a: "<<print128_hex_lanes(a)<<", b: "<<print128_hex_lanes(b);
     __m128i res = gfmul_k_optimized(a,b,q);
-    qInfo() << "res: (a, b, q):\n|>"<<print128_hex_lanes(res)<<"\n";
+    qInfo() << "res: (a, b, q):\n|>"<<print128_hex_lanes(res);
     if(_mm_test_all_zeros(_mm_set_epi32(0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff), _mm_xor_si128(res_assert, res))) {
         qInfo() << "Assertion (res == res_assert): holds true!";
     } else {
         qWarning() << "Assertion (res == res_assert): is false!";
     }
+    qInfo("\n");
 
 
     /* Test vektoren (TEST 2 - nach Intel Doc 2014 - Page 78 "...")
@@ -258,8 +536,8 @@ void gfmul_test(){
     / q: 00000000 00000000 00000000 00000087
     / a_refl: 6d02da056a66d4cd035206a56a54d4a9
     / b_refl: 860f0c1fa9ff53ffc0db81b7b2fd65fb
-    / assert: GFMUL(a_refl,b_refl,q) = c = 065B7FC3 340123F2 6DDAA34B 50D7CA5B
-    / assert: c_refl = da53eb0ad2c55bb64fc4802cc3feda60
+    / assert: GFMUL(a_refl,b_refl,q) = c = 065B7FC3 340123F2 6DDAA34B 50D7CA5B      (actually, following our notation this would be c_refl)
+    / assert: c_refl = da53eb0ad2c55bb64fc4802cc3feda60                             (and this would be c. But we followed the Intel naming scheme)
     / => In order for this to work, q must be q and must not be q_refl (this could also be due to us using a multiply&reduce routine different from Doc A.)
     */
     a = _mm_set_epi32(0x952b2a56, 0xa5604ac0, 0xb32b6656, 0xa05b40b6);
@@ -289,28 +567,79 @@ void gfmul_test(){
     }
 
 
-
     /*
-     * Test of gfmul_k_optimized_reflected
+     * Test of gfmul_idea
      *
-     * This is computing a reversed outcome, e.g. c from TEST-2
-     * Assert against c: 065B7FC3 340123F2 6DDAA34B 50D7CA5B
+     * We try to get around using reflect_xmm, thats why OUT should already be the final value
+     *
+     * Assert against res: da53eb0a d2c55bb6 4fc4802c c3feda60
+     * res_refl is: 065B7FC3 340123F2 6DDAA34B 50D7CA5B
      *
      */
-    qInfo() <<"\nNow testing gfmul_k_optimized_reflected";
+    qInfo() <<"\nNow testing gfmul_idea";
     a = _mm_set_epi32(0x952b2a56, 0xa5604ac0, 0xb32b6656, 0xa05b40b6);
     b = _mm_set_epi32(0xdfa6bf4d, 0xed81db03, 0xffcaff95, 0xf830f061);
-    res_assert = _mm_set_epi32(0x065B7FC3, 0x340123F2, 0x6DDAA34B, 0x50D7CA5B);
+    res_assert = _mm_set_epi32(0xda53eb0a, 0xd2c55bb6, 0x4fc4802c, 0xc3feda60);
+    __m128i res_assert_refl = _mm_set_epi32(0x065B7FC3, 0x340123F2, 0x6DDAA34B, 0x50D7CA5B);
     qInfo() << "a: "<<print128_hex_lanes(a)<<", b: "<<print128_hex_lanes(b);
-    res = gfmul_k_optimized_reversed(a,b);
+    res = gfmul_original_docA(a,b);
     __m128i res_refl = reflect_xmm(res);
     qInfo() << "res: (a, b, q):\n|>"<<print128_hex_lanes(res);
-    qInfo() << "res_refl: \n|>"<<print128_hex_lanes(res_refl)<<"\n";
+    qInfo() << "res_refl: \n|>"<<print128_hex_lanes(res_refl);
+    qInfo() << "res_assert:\n|>"<<print128_hex_lanes(res_assert);
+    qInfo() << "res_asser_refl:\n|>"<<print128_hex_lanes(res_assert_refl);
     if(_mm_test_all_zeros(_mm_set_epi32(0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff), _mm_xor_si128(res_assert, res))) {
         qInfo() << "Assertion (res == res_assert): holds true!";
     } else {
         qWarning() << "Assertion (res == res_assert): is false!";
     }
+    qInfo("\n");
+
+
+    /*
+     * Test of gfmul_k_optimized_reversed
+     *
+     * This is computing a reversed outcome, e.g. c from TEST-2
+     * Assert against c: 065B7FC3 340123F2 6DDAA34B 50D7CA5B
+     *
+     */
+    qInfo() <<"\nNow testing gfmul_k_optimized_reversed";
+    a = _mm_set_epi32(0x952b2a56, 0xa5604ac0, 0xb32b6656, 0xa05b40b6);
+    b = _mm_set_epi32(0xdfa6bf4d, 0xed81db03, 0xffcaff95, 0xf830f061);
+    q = _mm_set_epi32(0x00000000, 0x00000000, 0x00000000, 0x00000087);
+    res_assert = _mm_set_epi32(0x065B7FC3, 0x340123F2, 0x6DDAA34B, 0x50D7CA5B);
+    qInfo() << "a: "<<print128_hex_lanes(a)<<", b: "<<print128_hex_lanes(b);
+    res = gfmul_k_optimized_reversed(a,b, q);
+    res_refl = reflect_xmm(res);
+    qInfo() << "res: (a, b, q):\n|>"<<print128_hex_lanes(res);
+    qInfo() << "res_refl: \n|>"<<print128_hex_lanes(res_refl);
+    if(_mm_test_all_zeros(_mm_set_epi32(0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff), _mm_xor_si128(res_assert, res))) {
+        qInfo() << "Assertion (res == res_assert): holds true!";
+    } else {
+        qWarning() << "Assertion (res == res_assert): is false!";
+    }
+    qInfo("\n");
+
+
+
+    /*
+     * Identity testing:
+     * CLMUL(A',B') = (CLMUL(A,B) << 1)' ?= (CLMUL(A<<1, B)'
+     *
+     *
+     * CHECKED: Identity holds!
+     */
+    qInfo()<<"Identity checking. Check must be performed manually!";
+    a = _mm_set_epi32(0, 0, 0, 0x00000010);
+    b = _mm_set_epi32(0, 0, 0, 0x00000002);
+    struct int256 c256 = clmul(a,b);
+    qInfo()<<"CLMUL(a,b) = 0x00000010 * 0x00000002 = \n|> "<<print256_hex_lanes(c256);
+    a_refl = reflect_xmm(a);
+    b_refl = reflect_xmm(b);
+    c256 = clmul(a_refl, b_refl);
+    qInfo()<<"CLMUL(a',b') = \n|> "<<print256_hex_lanes(c256);
+    c256 = clmul(bitshift_left(a, 1), b);
+    qInfo()<<"CLMUL(a<<1, b) = \n|> "<<print256_hex_lanes(c256);
 
 }
 
