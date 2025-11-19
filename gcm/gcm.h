@@ -5,6 +5,7 @@
 #include <wmmintrin.h>
 #include <emmintrin.h>
 #include <smmintrin.h>
+#include <QString>
 
 /**
  * Reflect a complete 128bit-string. bit0<>bit127, bit1<>bit126, ...
@@ -29,6 +30,7 @@ __m128i gfmul(__m128i a, __m128i b, __m128i q);
 __m128i bitshift_left(__m128i a, unsigned char count);
 struct int256 bitshift_left256(__m128i i32, __m128i i10, unsigned char count);
 __m128i bitshift_right(__m128i a, unsigned char count);
+QString print128_hex_lanes(__m128i var);
 void gfmul_test();
 struct int256{
     __m128i t10;
