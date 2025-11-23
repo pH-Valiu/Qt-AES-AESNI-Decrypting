@@ -36,5 +36,8 @@ struct int256{
     __m128i t10;
     __m128i t32;
 };
+static __m128i Q = _mm_set_epi32(0, 0, 0, 0x00000087);
+static __m128i Q_r = _mm_set_epi32(0, 0, 0xc2000000, 0);
+static __m128i ZERO = _mm_setzero_si128();
 
 #endif // GCM_H
