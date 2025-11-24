@@ -84,6 +84,7 @@ __m128i gfmul(__m128i a, __m128i b){
  */
 __m128i gfmul_k_optimized(__m128i a, __m128i b, __m128i q){
     // Step 0: Pre-requesites
+    //__m128i k = _mm_xor_si128(_mm_clmulepi64_si128(b, q, 0x01), _mm_slli_si128(b, 8)); This line achieved the same as the one below (in reversed case think about the bitshift which could result in greater >128 bit intermediate result)
     __m128i k = _mm_xor_si128(gfmul(_mm_srli_si128(b, 8), q, q), _mm_slli_si128(b, 8));     // K = GFMUL(B[1], Q) + B[0]*x^64
 
     // Step 1: Multiply
@@ -286,8 +287,8 @@ __m128i gfmul_reversed_k_optimized(__m128i a, __m128i b){
      * And because of the CL-identity, I think we would have to perform a shift: --> (CLMUL(B[0], Q_r) << 1). The carry out might have to be treated though.
      *
      * Additional food for though: The bitshift to B[0]. Must it be applied before CLMUL(B[0], Q_r) or after the CLMUL operation?
-     * 1. We try after the CLMUL operation
-     *
+     * 1. We try after the CLMUL operation --> Failed
+     * 2. We try before the CLMUL operation
      *
      * Now, the second part will temporarily not be discussed, because one step at a time
      * Some idea though:
@@ -297,6 +298,7 @@ __m128i gfmul_reversed_k_optimized(__m128i a, __m128i b){
      *
      */
     __m128i q_k = Q_r;
+    //__m128i k_r = gfmul_reversed_bl_opt(_mm_unpacklo_epi64(b, ZERO), q_k);
     __m128i k_r = _mm_clmulepi64_si128(b, q_k, 0x00); // this is the same as GFMUL(B[0], Q_r) ?= CLMUL(B[0], Q_r)
     k_r = _mm_xor_si128(k_r, _mm_slli_si128(b, 8));     // this adds B[0]*x^64 onto K_r
 
@@ -305,6 +307,9 @@ __m128i gfmul_reversed_k_optimized(__m128i a, __m128i b){
     carry_out = _mm_srli_si128(carry_out, 12);      // carry now contains only the most significant bit of k_r at index 0
 
     __m128i k_r_bl = bitshift_left(k_r, 1);     // now, we have shifted it once to the left (CLMUL(B[0], Q_r) << 1)
+    //__m128i k_r_bl = k_r;
+    qInfo() << "DEBUG: k_r:\n>>>| " << print128_hex_lanes(k_r);
+    qInfo() << "DEBUG: k_r_bl:\n>>>| " << print128_hex_lanes(k_r_bl);
 
     // now, we would have to reduce k_r with q_k, but since 64bit times 64bit never leaves our F(2^128) field, we do not need to reduce
 
@@ -314,14 +319,14 @@ __m128i gfmul_reversed_k_optimized(__m128i a, __m128i b){
     __m128i a0b1 = _mm_clmulepi64_si128(a, b, 0x10);
     __m128i a1b0 = _mm_clmulepi64_si128(a, b, 0x01);
     __m128i a1b1 = _mm_clmulepi64_si128(a, b, 0x11);
-    __m128i a1k0 = _mm_clmulepi64_si128(a, k_r_bl, 0x01);       // A1K0 = CLMUL(A[1], K_r[0]);
-    __m128i a1k1 = _mm_clmulepi64_si128(a, k_r_bl, 0x11);       // A1K1 = CLMUL(A[1], K_r[1]);
+    __m128i a0k0 = _mm_clmulepi64_si128(a, k_r_bl, 0x00);       // A0K0 = CLMUL(A[0], K_r[0]);
+    __m128i a0k1 = _mm_clmulepi64_si128(a, k_r_bl, 0x10);       // A0K1 = CLMUL(A[0], K_r[1]);
 
     __m128i mid = _mm_xor_si128(a0b1, a1b0);
-    mid = _mm_xor_si128(mid, a1k0);
+    mid = _mm_xor_si128(mid, a0k0);
 
     __m128i c01 = _mm_slli_si128(mid, 8);
-    __m128i c23 = _mm_xor_si128(a1b1, a1k1);
+    __m128i c23 = _mm_xor_si128(a1b1, a0k1);
     c23 = _mm_xor_si128(c23, _mm_srli_si128(mid, 8));
 
 
