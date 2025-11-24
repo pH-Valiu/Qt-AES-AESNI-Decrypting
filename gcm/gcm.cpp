@@ -111,42 +111,6 @@ __m128i gfmul_k_optimized(__m128i a, __m128i b){
     return gfmul_k_optimized(a, b, q);
 }
 
-__m128i gfmul_k_optimized_reversed(__m128i a, __m128i b, __m128i q){
-    __m128i a_refl = reflect_xmm(a);
-    __m128i b_refl = reflect_xmm(b);
-    //__m128i q_refl = reflect_xmm(bitshift_right(q, 1));
-    __m128i q_refl = _mm_set_epi32(0, 0, 0xc2000000, 0);        // this is reflect_64(Q >> 1)
-    __m128i k = _mm_xor_si128(gfmul(_mm_srli_si128(b, 8), q, q), _mm_slli_si128(b, 8));     // K = GFMUL(B[1], Q) + B[0]*x^64
-    __m128i k_refl = reflect_xmm(k);
-
-    // Step 1: Multiply
-    __m128i a0k0 = _mm_clmulepi64_si128(a_refl, k_refl, 0x00);
-    __m128i a0k1 = _mm_clmulepi64_si128(a_refl, k_refl, 0x10);
-    __m128i a1b0 = _mm_clmulepi64_si128(a_refl, b_refl, 0x01);
-    __m128i a1b1 = _mm_clmulepi64_si128(a_refl, b_refl, 0x11);
-
-    __m128i lower  = _mm_xor_si128(a1b0, a0k0);     // computes lower  = a1b0 + a0k0
-    __m128i higher = _mm_xor_si128(a1b1, a0k1);     // computes higher = a1b1 + a0k1
-
-    __m128i c01 = _mm_xor_si128(lower, _mm_slli_si128(higher, 8));  // c01 = lower + (higher << 64)
-    __m128i c23 = _mm_srli_si128(higher, 8);                        // c02 = higher >> 64           (highest 64 bits are 0)
-
-    // Step 2: Reduce
-    __m128i x = _mm_clmulepi64_si128(c01, q_refl, 0x00);        // this is x = CLMUL(c0, Q')
-
-    __m128i f = _mm_srli_si128(c01, 8);             // f = [0, c1]
-    f = _mm_xor_si128(f, x);                        // f = [x1, c1+x0]
-    f = _mm_xor_si128(f, _mm_slli_si128(c23, 8));   // f = [x1+c2, c1+x0]
-    f = _mm_xor_si128(f, _mm_slli_si128(c01, 8));    // f = [x1+c2+c0, c1+x0]
-
-    return f;
-}
-
-__m128i gfmul_k_optimized_reversed(__m128i a, __m128i b){
-    __m128i q = _mm_set_epi32(0, 0, 0, 0x00000087); //0x87 is 10000111 being x^7 + x^2 + x + 1
-    return gfmul_k_optimized_reversed(a, b, q);
-}
-
 struct int256 clmul(__m128i a, __m128i b){
     // Step 1: Multiply
     __m128i a0b0 = _mm_clmulepi64_si128(a, b, 0x00);
@@ -263,84 +227,6 @@ __m128i gfmul_reversed_bl_opt(__m128i a, __m128i b){
     x = _mm_clmulepi64_si128(c01, Q_r, 0x01);               // computes C[1] * Q = higher(C[1:0]) * lower(Q)
     c23 = _mm_xor_si128(c23, x);                          // add full X on C[3:2]
     c23 = _mm_xor_si128(c23, _mm_unpackhi_epi64(ZERO, c01)); // add C[1] on higher C[3:2] (zeroing out C[0])
-
-    return c23;
-}
-
-__m128i gfmul_reversed_k_optimized(__m128i a, __m128i b){
-    /*
-     * Scrabbling idea
-     * I try to correct DocB gfmul k optimized.
-     * The K definition is wrong I think. Because they simply use the reversed K' = reflect(K), but I dont think thats possible.
-     * And I also dont want to reflect.
-     * And I need to keep in mind this <<1 to the whole C[3:0].
-     * But while in the end we do not have a C[3:0] but only a Y[2:0] left, we still have to think about how the K for our purposes is being created
-     * K, in the normal world, is derived from seeing that the highest 64 bits = A[1] times B[1], when we want to reduce them, so:
-     * GFMUL(A[1],B[1]) = GFMUL(GFMUL(A[1],B[1]), Q) mod P ~= A[1] * B[1] * Q mod P = A[1] * K = GFMUL(A[1], K)
-     * here, we defined K = GFMUL(B[1], Q)
-     * so: GFMUL(A[1], K) = CLMUL(A[1], K[0]) + CLMUL(A[1], K[1])*x^64
-     *
-     * mapping this into reversed world, we would have to look at GFMUL(A[0], B[0]) = GFMUL(GFMUL(A[0], B[0]), Q_r) mod P ?= GFMUL(A[0], K_r)
-     * here, K_r = GFMUL(B[0], Q_r)
-     * But (also in the top case), because B[0] (and B[1]), and Q_r (and Q) are all just 64bit big, Multiplying them together will never leave the finite field and thus require a reduction.
-     * Hence, K_r = GFMUL(B[0], Q_r) == CLMUL(B[0], Q_r)
-     * And because of the CL-identity, I think we would have to perform a shift: --> (CLMUL(B[0], Q_r) << 1). The carry out might have to be treated though.
-     *
-     * Additional food for though: The bitshift to B[0]. Must it be applied before CLMUL(B[0], Q_r) or after the CLMUL operation?
-     * 1. We try after the CLMUL operation --> Failed
-     * 2. We try before the CLMUL operation
-     *
-     * Now, the second part will temporarily not be discussed, because one step at a time
-     * Some idea though:
-     * K_r = (CLMUL(B[0], Q_r) + B[1]*x^64) << 1 = (B[1]*x^64 + CLMUL(B[0], Q_r)) << 1
-     * Still, there is the question of the carry-out
-     * I would argue, that since we have remaining [A[1]*B[1]]*x^128 + [A[1]*B[0]]*x^64, we have to shift these M[2:0] << 1 and bring that carry out from before and set at LSB.
-     *
-     */
-    __m128i q_k = Q_r;
-    //__m128i k_r = gfmul_reversed_bl_opt(_mm_unpacklo_epi64(b, ZERO), q_k);
-    __m128i k_r = _mm_clmulepi64_si128(b, q_k, 0x00); // this is the same as GFMUL(B[0], Q_r) ?= CLMUL(B[0], Q_r)
-    k_r = _mm_xor_si128(k_r, _mm_slli_si128(b, 8));     // this adds B[0]*x^64 onto K_r
-
-    // we have to get the carry-out of k_r (when shifted by << 1)
-    __m128i carry_out = _mm_srli_epi32(k_r, 31);
-    carry_out = _mm_srli_si128(carry_out, 12);      // carry now contains only the most significant bit of k_r at index 0
-
-    __m128i k_r_bl = bitshift_left(k_r, 1);     // now, we have shifted it once to the left (CLMUL(B[0], Q_r) << 1)
-    //__m128i k_r_bl = k_r;
-    qInfo() << "DEBUG: k_r:\n>>>| " << print128_hex_lanes(k_r);
-    qInfo() << "DEBUG: k_r_bl:\n>>>| " << print128_hex_lanes(k_r_bl);
-
-    // now, we would have to reduce k_r with q_k, but since 64bit times 64bit never leaves our F(2^128) field, we do not need to reduce
-
-
-
-    // now that we have k_r, we compute the rest
-    __m128i a0b1 = _mm_clmulepi64_si128(a, b, 0x10);
-    __m128i a1b0 = _mm_clmulepi64_si128(a, b, 0x01);
-    __m128i a1b1 = _mm_clmulepi64_si128(a, b, 0x11);
-    __m128i a0k0 = _mm_clmulepi64_si128(a, k_r_bl, 0x00);       // A0K0 = CLMUL(A[0], K_r[0]);
-    __m128i a0k1 = _mm_clmulepi64_si128(a, k_r_bl, 0x10);       // A0K1 = CLMUL(A[0], K_r[1]);
-
-    __m128i mid = _mm_xor_si128(a0b1, a1b0);
-    mid = _mm_xor_si128(mid, a0k0);
-
-    __m128i c01 = _mm_slli_si128(mid, 8);
-    __m128i c23 = _mm_xor_si128(a1b1, a0k1);
-    c23 = _mm_xor_si128(c23, _mm_srli_si128(mid, 8));
-
-
-    // bitshift << 1
-    struct int256 t = bitshift_left256(c23, c01, 1);
-    c01 = t.t10;
-    c23 = t.t32;
-
-    // Reduce with Q_r
-
-    __m128i x = _mm_clmulepi64_si128(c01, q_k, 0x01);
-    c23 = _mm_xor_si128(c23, x);
-    c23 = _mm_xor_si128(c23, _mm_unpackhi_epi64(ZERO, c01));
-
 
     return c23;
 }
@@ -731,55 +617,6 @@ void gfmul_test(){
     BenchmarkUtil::run("DocA-mod", gfmul_original_docA_mod, a, b);
     BenchmarkUtil::run("DocB", gfmul_reversed, a, b);
     BenchmarkUtil::run("DocB-BlOpt", gfmul_reversed_bl_opt, a, b);
-
-    /*
-     * Test of gfmul_reversed_k_optimized
-     *
-     * We try to get around using reflect_xmm, thats why OUT should already be the final value
-     *
-     * Assert against res: da53eb0a d2c55bb6 4fc4802c c3feda60
-     * res_refl is: 065B7FC3 340123F2 6DDAA34B 50D7CA5B
-     *
-     */
-    qInfo() <<"\nNow testing gfmul_reversed_k_optimized";
-    a = _mm_set_epi32(0x952b2a56, 0xa5604ac0, 0xb32b6656, 0xa05b40b6);
-    b = _mm_set_epi32(0xdfa6bf4d, 0xed81db03, 0xffcaff95, 0xf830f061);
-    res_assert = _mm_set_epi32(0xda53eb0a, 0xd2c55bb6, 0x4fc4802c, 0xc3feda60);
-    qInfo() << "a: "<<print128_hex_lanes(a)<<", b: "<<print128_hex_lanes(b);
-    res = gfmul_reversed_k_optimized(a,b);
-    qInfo() << "res: (a, b, q):\n|>"<<print128_hex_lanes(res);
-    qInfo() << "res_assert:\n|>"<<print128_hex_lanes(res_assert);
-    if(_mm_test_all_zeros(_mm_set_epi32(0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff), _mm_xor_si128(res_assert, res))) {
-        qInfo() << "Assertion (res == res_assert): holds true!";
-    } else {
-        qWarning() << "Assertion (res == res_assert): is false!";
-    }
-    qInfo("\n");
-
-
-    /*
-     * Test of gfmul_k_optimized_reversed
-     *
-     * This is computing a reversed outcome, e.g. c from TEST-2
-     * Assert against c: 065B7FC3 340123F2 6DDAA34B 50D7CA5B
-     *
-     */
-    qInfo() <<"\nNow testing gfmul_k_optimized_reversed";
-    a = _mm_set_epi32(0x952b2a56, 0xa5604ac0, 0xb32b6656, 0xa05b40b6);
-    b = _mm_set_epi32(0xdfa6bf4d, 0xed81db03, 0xffcaff95, 0xf830f061);
-    q = _mm_set_epi32(0x00000000, 0x00000000, 0x00000000, 0x00000087);
-    res_assert = _mm_set_epi32(0x065B7FC3, 0x340123F2, 0x6DDAA34B, 0x50D7CA5B);
-    qInfo() << "a: "<<print128_hex_lanes(a)<<", b: "<<print128_hex_lanes(b);
-    res = gfmul_k_optimized_reversed(a,b, q);
-    res_refl = reflect_xmm(res);
-    qInfo() << "res: (a, b, q):\n|>"<<print128_hex_lanes(res);
-    qInfo() << "res_refl: \n|>"<<print128_hex_lanes(res_refl);
-    if(_mm_test_all_zeros(_mm_set_epi32(0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff), _mm_xor_si128(res_assert, res))) {
-        qInfo() << "Assertion (res == res_assert): holds true!";
-    } else {
-        qWarning() << "Assertion (res == res_assert): is false!";
-    }
-    qInfo("\n");
 }
 
 
