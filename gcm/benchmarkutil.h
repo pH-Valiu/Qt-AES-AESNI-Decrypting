@@ -5,14 +5,11 @@
 #include <QtCore>
 #include <algorithm>
 #include <cmath>
+#include <x86intrin.h>   // for __rdtsc
 
-// =============================
-//  Benchmark Utility for Qt
-// =============================
 class BenchmarkUtil {
 public:
 
-    // Function signature you want to benchmark:
     using GfMulFunc = __m128i(*)(__m128i, __m128i);
 
     struct Stats {
@@ -24,7 +21,7 @@ public:
     };
 
     // =============================
-    //  Public Benchmark Entry Point
+    // Public entry point
     // =============================
     static void run(const QString &name,
                     GfMulFunc func,
@@ -38,27 +35,35 @@ public:
         qInfo() << "Benchmarking:" << name;
         qInfo() << "====================================";
 
-
         warmUp(func, fixedA, fixedB, warmupIters);
 
         Stats blockStats   = measureBlock(func, fixedA, fixedB, measureIters);
-        Stats perCallStats = measureSingleCalls(func, fixedA, fixedB, perCallSamples);
 
-        qInfo() << "--------- Block measurement (much more stable) ---------";
+        QVector<quint64> rawCycles;
+        Stats perCallStats = measureSingleCallsRDTSC(
+            func, fixedA, fixedB,
+            perCallSamples, &rawCycles);
+
+        // convert cycles -> ns using approximate CPU freq
+        double cpuGHz = calibratedCPUGHz();
+        QVector<quint64> rawNs;
+        rawNs.reserve(rawCycles.size());
+        for (quint64 c : rawCycles)
+            rawNs.append(quint64(c / cpuGHz));
+
+        qInfo() << "--------- Block measurement (stable) ---------";
         printStats(blockStats);
 
-        qInfo() << "--------- Per-call timing (fine-grained) ---------";
+        qInfo() << "--------- Per-call timing (RDTSC) ---------";
         printStats(perCallStats);
 
-        printHistogram(perCallStats, "Per-call histogram (ns)");
-
-        qInfo() << "";
+        printHistogramRaw(rawNs, "Per-call timing histogram (ns)");
     }
 
 private:
 
     // =============================
-    //   Random 128-bit generator
+    // Random 128-bit generator
     // =============================
     static __m128i rand128() {
         return _mm_set_epi64x(QRandomGenerator::global()->generate64(),
@@ -66,7 +71,7 @@ private:
     }
 
     // =============================
-    //   Warm-up run
+    // Warm-up run
     // =============================
     static void warmUp(GfMulFunc func,
                        __m128i a, __m128i b,
@@ -76,9 +81,9 @@ private:
             func(a, b);
     }
 
-    // =====================================================
-    //  Measure total time of (measureIters) iterations
-    // =====================================================
+    // =============================
+    // Block measurement using RDTSC
+    // =============================
     static Stats measureBlock(GfMulFunc func,
                               __m128i a, __m128i b,
                               int iters)
@@ -86,53 +91,65 @@ private:
         QVector<quint64> times;
         times.reserve(20);
 
-        QElapsedTimer timer;
-
-        // perform several blocks for statistical stability
         for (int s = 0; s < 20; s++) {
-            timer.start();
+            uint64_t start = __rdtsc();
             for (int i = 0; i < iters; i++)
                 func(a, b);
-            quint64 ns = timer.nsecsElapsed();
-
-            times.append(ns / iters); // per-call time
-        }
-
-        return computeStats(times);
-    }
-
-    // =====================================================
-    //   Measure per-call timing using high-res sampling
-    // =====================================================
-    static Stats measureSingleCalls(GfMulFunc func,
-                                    __m128i a, __m128i b,
-                                    int samples)
-    {
-        QVector<quint64> times;
-        times.reserve(samples);
-
-        QElapsedTimer timer;
-
-        for (int i = 0; i < samples; i++) {
-            __m128i rA = a;
-            __m128i rB = b;
-
-            // small random jitter to avoid operand bias
-            if (i % 4 == 0) rA = rand128();
-            if (i % 6 == 0) rB = rand128();
-
-            quint64 start = timer.nsecsElapsed();
-            func(rA, rB);
-            quint64 end = timer.nsecsElapsed();
-
-            times.append(end - start);
+            uint64_t end = __rdtsc();
+            times.append((end - start) / iters);
         }
 
         return computeStats(times);
     }
 
     // =============================
-    //     Compute statistics
+    // Per-call measurement using RDTSC
+    // =============================
+    static Stats measureSingleCallsRDTSC(GfMulFunc func,
+                                         __m128i a, __m128i b,
+                                         int samples,
+                                         QVector<quint64>* outRaw)
+    {
+        QVector<quint64> times;
+        times.reserve(samples);
+
+        for (int i = 0; i < samples; i++) {
+            __m128i rA = a;
+            __m128i rB = b;
+            if (i % 4 == 0) rA = rand128();
+            if (i % 6 == 0) rB = rand128();
+
+            uint64_t start = __rdtsc();
+            func(rA, rB);
+            uint64_t end = __rdtsc();
+
+            times.append(end - start);
+        }
+
+        if (outRaw) *outRaw = times;
+        return computeStats(times);
+    }
+
+    // =============================
+    // Estimate CPU frequency in GHz
+    // =============================
+    static double calibratedCPUGHz()
+    {
+        // Measure wall clock over 100ms
+        const int iters = 1000000;
+        QElapsedTimer t;
+        t.start();
+        uint64_t start = __rdtsc();
+        for (int i = 0; i < iters; i++) { __asm__ volatile(""); }
+        uint64_t end = __rdtsc();
+        qint64 ms = t.elapsed();
+        if (ms == 0) ms = 1;
+        double cyclesPerMs = double(end - start) / ms;
+        return cyclesPerMs / 1e6; // GHz
+    }
+
+    // =============================
+    // Compute statistics
     // =============================
     static Stats computeStats(const QVector<quint64> &v)
     {
@@ -158,36 +175,61 @@ private:
     }
 
     // =============================
-    //     Print Stats
+    // Print statistics
     // =============================
     static void printStats(const Stats &s)
     {
         qInfo().nospace()
             << "min: "    << s.min
-            << " ns   median: " << s.median
-            << " ns   avg: "    << s.avg
-            << " ns   max: "    << s.max
-            << " ns   stddev: " << s.stddev;
+            << " cycles   median: " << s.median
+            << " cycles   avg: "    << s.avg
+            << " cycles   max: "    << s.max
+            << " cycles   stddev: " << s.stddev;
     }
 
     // =============================
-    //       Histogram
+    // Histogram
     // =============================
-    static void printHistogram(const Stats &s, const QString &title)
+    static void printHistogramRaw(const QVector<quint64> &data,
+                                  const QString &title,
+                                  int bins = 30,
+                                  quint64 fixedMin = 5) // <--- new parameter
     {
+        if (data.isEmpty()) return;
+
+        quint64 minv = fixedMin;                   // always start at 0ns
+        quint64 maxv = *std::max_element(data.begin(), data.end());
+        quint64 range = maxv - minv;
+        quint64 step  = 1;//std::max<quint64>(1, range / bins);
+
+        QVector<int> hist(bins, 0);
+        for (quint64 v : data) {
+            int idx = std::min<int>((v - minv) / step, bins - 1);
+            hist[idx]++;
+        }
+
+        int maxCount = *std::max_element(hist.begin(), hist.end());
+        int barWidth = 40;
+
         qInfo() << title;
+        qInfo().nospace() << "Range: " << minv << " – " << maxv
+                          << " ns   (bin step = " << step << ")";
 
-        int bins = 10;
-        quint64 range = s.max - s.min;
-        quint64 step = std::max<quint64>(1, range / bins);
+        for (int i = 0; i < bins; i++) {
+            quint64 lo = minv + i * step;
+            quint64 hi = lo + step;
 
-        qInfo() << "Range:" << s.min << "to" << s.max << "(step:" << step << ")";
+            int count = hist[i];
+            int bars = (int)((double)count / maxCount * barWidth);
 
-        // simple text histogram
-        // NOTE: This uses approximate stats since raw samples not stored here.
-        //       Extend this if you want full histogram accuracy.
+            QString bar(bars, QChar(0x2588));
+
+            qInfo().nospace()
+                << "[" << lo << " – " << hi << " ns] "
+                << bar << " " << count;
+        }
     }
-};
 
+};
 
 #endif // BENCHMARKUTIL_H
