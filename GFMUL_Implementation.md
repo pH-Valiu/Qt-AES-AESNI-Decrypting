@@ -20,10 +20,11 @@ For AES-GCM this refers to the GF($2^{128}$) field.
 Elements of this field can be expressed as polynoms with coefficients in GF($2^1$):
 ```math
 \begin{align*}
-a(x) \in \text{GF}(2^{128}) \
-a(x) := \sum_{i=0}^{127}a_i x^i, \text{with } a_i \in \text{GF}(2^1)
+a(x) \in \text{GF}(2^{128}) \implies a(x) := \sum_{i=0}^{127}a_i x^i 
 \end{align*}
 ```
+, with $a_i \in$ GF($2^1$) 
+
 If the question now already arrives, how a `__m128i` value translates into the coefficients $a_i$?
 --> E.g. whether:
 ```
@@ -48,7 +49,7 @@ Addition and multiplication in GF(2) can be implemented as the **XOR** operation
 Addition in GF(2^{128}) can be implemented as an bitwise **XOR** operation:
 ```math
 \begin{align*}
-a(x)+b(x)&=(a_{127}x^{127}+a_{126}x^{126}+...+a_0x^0) + (b_{127}x^{127}+b_{126}x^{126}+...+b_0x^0) \
+a(x)+b(x)&=\big(a_{127}x^{127}+a_{126}x^{126}+...+a_0x^0\big) + \big(b_{127}x^{127}+b_{126}x^{126}+...+b_0x^0\big) \
 &= (a_{127} \oplus b_{127})x^{127} + (a_{126}\oplus b_{126})x^{126} + ... + (a_0\oplus b_0)x^0 \
 &= c(x)
 \end{align*}
@@ -88,11 +89,15 @@ b(x) := b_{[1]}(x)x^{64} + b_{[0]}(x)
 This is because, we can not directly compute `CLMUL(a(x), b(x))`, but instead we can only multiply polynomials with degree $\leq 63$ (`$\text{CLMUL}_{64}$` --> `_mm_clmulepi64_si128()`)  yielding a polynomial of degree $\leq 255$.\
 Thus:
 ```math
-\text{CLMUL}(a(x), b(x)) = (\text{CLMUL}_{64}(a_{[1]}(x), b_{[1]}(x)))\cdot x^{128} + (\text{CLMUL}_{64}(a_{[0]}(x), b_{[1]}(x)) + \text{CLMUL}_{64}(a_{[1]}(x), b_{[0]}(x)))\cdot x^{64} + (\text{CLMUL}_{64}(a_{[0]}(x), b_{[0]}(x)))
+\begin{align*}
+\text{CLMUL}(a(x), b(x)) &= \big(\text{CLMUL}_{64}(a_{[1]}(x), b_{[1]}(x))\big) x^{128} \
+&+ \big(\text{CLMUL}_{64}(a_{[0]}(x), b_{[1]}(x)) + \text{CLMUL}_{64}(a_{[1]}(x), b_{[0]}(x))\big) x^{64} \
+&+ \big(\text{CLMUL}_{64}(a_{[0]}(x), b_{[0]}(x))\big)
+\end{align*}
 ```
 or written more cleanly (but not mathematically correct):
 ```math
-\text{CLMUL}(a(x), b(x)) = (a_{[1]}b_{[1]})\cdot x^{128} + (a_{[0]}b_{[1]} + a_{[1]}b_{[0]})\cdot x^{64} + (a_{[0]}b_{[0]}) = c(x)
+\text{CLMUL}(a(x), b(x)) = (a_{[1]}b_{[1]})\cdot x^{128} + (a_{[0]}b_{[1]} + a_{[1]}b_{[0]}) x^{64} + (a_{[0]}b_{[0]})
 ```
 
 ### Bit-Reflection
@@ -125,7 +130,7 @@ __m128i a_refl = _mm_set_epi32(0xc0000000, 0x00000001, 0x80000000, 0x00000004);
 Let's apply this on the irreducible polynomial P (will be useful later):
 ```math
 \begin{align*}
-P(x) &:= x^{128} + x^7 + x^2 + x^1 + 1 \
+P(x) &:= x^{128} + x^7 + x^2 + x^1 + 1 \\[6pt]
 R_{129}(P(x)) &= x^{128} \cdot (x^{-128}+x^{-7}+x^{-2}+x^{-1}+x^{-0}) \
 &= x^0+x^{121} + x^{126} + x^{127} + x^{128} \
 &= x^{128} + x^{127}+x^{126}+x^{121}+1
@@ -135,11 +140,11 @@ R_{129}(P(x)) &= x^{128} \cdot (x^{-128}+x^{-7}+x^{-2}+x^{-1}+x^{-0}) \
 ### CLMUL Identity
 This following identity is crucial for implementing a correct gfmul implementation usable for GHASH.
 ```math
-\text{CLMUL}(R_{128}(a(x))\text{, }R_{128}(b(x))) = R_{256}(\text{CLMUL}(a(x)\text{, }b(x)) << 1) 
+\text{CLMUL}\big(R_{128}(a(x)), R_{128}(b(x))\big) = R_{256}\big(\text{CLMUL}(a(x), b(x)) << 1\big) 
 ```
 Or in a more clean form:
 ```math
-\text{CLMUL}(a(x)', b(x)') = (\text{CLMUL}(a(x), b(x)) << 1)'
+\text{CLMUL}\big(a(x)', b(x)'\big) = \big(\text{CLMUL}(a(x), b(x)) << 1\big)'
 ```
 
 ## Standard GFMUL implementation
@@ -163,13 +168,18 @@ Then:
 GFMUL(a(x), b(x)) = CLMUL(a(x), b(x)) mod P(x) = c(x)
 ```
 ```math
-c(x) := \text{CLMUL}(a(x), b(x)) = (\text{CLMUL}_{64}(a_{[1]}(x), b_{[1]}(x)))\cdot x^{128} + (\text{CLMUL}_{64}(a_{[0]}(x), b_{[1]}(x)) + \text{CLMUL}_{64}(a_{[1]}(x), b_{[0]}(x)))\cdot x^{64} + (\text{CLMUL}_{64}(a_{[0]}(x), b_{[0]}(x)))
+\begin{align*}
+c(x) &:= \text{CLMUL}(a(x), b(x))  \\[4pt]
+&= \big(\text{CLMUL}_{64}(a_{[1]}(x), b_{[1]}(x))\big)x^{128} \
+&+ \big(\text{CLMUL}_{64}(a_{[0]}(x), b_{[1]}(x)) + \text{CLMUL}_{64}(a_{[1]}(x), b_{[0]}(x))\big)x^{64} \
+&+ \big(\text{CLMUL}_{64}(a_{[0]}(x), b_{[0]}(x))\big)
+\end{align*}
 ```
 or written more cleanly:
 ```math
-c(x) \approx \text{CLMUL}(a(x), b(x)) = (a_{[1]}b_{[1]})\cdot x^{128} + (a_{[0]}b_{[1]} + a_{[1]}b_{[0]})\cdot x^{64} + (a_{[0]}b_{[0]}) = c(x)
+c(x) \approx (a_{[1]}b_{[1]})x^{128} + \big(a_{[0]}b_{[1]} + a_{[1]}b_{[0]}\big)x^{64} + (a_{[0]}b_{[0]}) = c(x)
 ```
-This results in a polynomial $c(x)$ which internally can be viewed as four smaller polynomials with degree $\leq 63$ each (keep in mind that $a_{[1]}b_{[1]}$ is of degree $\leq 127$.
+This results in a polynomial $c(x)$ which internally can be viewed as four smaller polynomials with degree $\leq 63$ each (keep in mind that $a_{\[1\]}b_{\[1\]}$ is of degree $\leq 127$.
 ```math
 \begin{align*}
 c(x) &= c_{[3]}(x)x^{192} + c_{[2]}(x)x^{128} + c_{[1]}(x)x^{64} + c_{[0]}(x) \
@@ -186,63 +196,43 @@ x^{128} \equiv x^7 + x^2 + x^1 + 1 \mod \big(x^{128} + x^7 + x^2 + x^1 + 1 = P(x
 We do the reduction starting with the polynomial $c(x)$ of degree $\leq 254$:
 ```math
 \begin{align*}
-c(x) &\equiv c_{[3]}(x)x^{64}x^{128} + c_{[2]}(x)x^{128} + c_{[1]}(x)x^{64} + c_{[0]}(x) \mod P(x) \
-&\equiv (c_{[3]}(x) \cdot (x^7+x^2+x^1+1))x^{64} + c_{[2]}(x)x^{128} + c_{[1]}(x)x^{64} + c_{[0]}(x) \mod P(x)
+c(x) &\equiv c_{[3]}(x)x^{64}x^{128} + c_{[2]}(x)x^{128} + c_{[1]}(x)x^{64} + c_{[0]}(x) \mod P(x) \\[6pt]
+&\equiv \big(c_{[3]}(x) \cdot (x^7+x^2+x^1+1)\big)x^{64} + c_{[2]}(x)x^{128} + c_{[1]}(x)x^{64} + c_{[0]}(x) \mod P(x) \\[6pt]
 \end{align*}
 ```
 We can write:
 ```math
 \begin{align*}
-u(x) &:= (c_{[3]}(x) \cdot (x^7+x^2+x^1+1) \
-&= \text{CLMUL}_{64}(c_{[3]}(x), Q(x)) \
-\text{splitting u(x) (degree 127) into two smaller polynomials (degree 63))
-&= u_{[1]}(x)x^{64} + u_{[0]}(x) \
+u(x) &:= (c_{[3]}(x) \cdot (x^7+x^2+x^1+1)) \\[6pt]
+&= \text{CLMUL}_{64}(c_{[3]}(x), Q(x)) \\[6pt]
+&= u_{[1]}(x)x^{64} + u_{[0]}(x) \\[6pt]
 \end{align*}
 ```
+We split $u(x)$ again in two smaller polynomials. \
 Hence:
 ```math
 \begin{align*}
-c(x) &\equiv (c_{[3]}(x) \cdot (x^7+x^2+x^1+1))x^{64} + c_{[2]}(x)x^{128} + c_{[1]}(x)x^{64} + c_{[0]}(x) \mod P(x) \
-&\equiv (u_{[1]}(x)x^{64} + u_{[0]}(x))x^{64} + c_{[2]}(x)x^{128} + c_{[1]}(x)x^{64} + c_{[0]}(x) \mod P(x)  \
-&\equiv (u_{[1]}(x) + c_{[2]}(x))x^{128} + (u_{[0]}(x) + c_{[1]}(x))x^{64} + c_{[0]}(x) \mod P \
-&\equiv ((u_{[1]}(x) + c_{[2]}(x)) \cdot (x^7+x^2+x^1+1)) + (u_{[0]}(x) + c_{[1]}(x))x^{64} + c_{[0]}(x) \mod P
+c(x) &\equiv \big(c_{[3]}(x) \cdot (x^7+x^2+x^1+1)\big)x^{64} + c_{[2]}(x)x^{128} + c_{[1]}(x)x^{64} + c_{[0]}(x) \mod P(x) \\[6pt]
+&\equiv \big(u_{[1]}(x)x^{64} + u_{[0]}(x)\big)x^{64} + c_{[2]}(x)x^{128} + c_{[1]}(x)x^{64} + c_{[0]}(x) \mod P(x)  \\[6pt]
+&\equiv \big(u_{[1]}(x) + c_{[2]}(x)\big)x^{128} + \big(u_{[0]}(x) + c_{[1]}(x)\big)x^{64} + c_{[0]}(x) \mod P \\[6pt]
+&\equiv \big((u_{[1]}(x) + c_{[2]}(x)) \cdot (x^7+x^2+x^1+1)\big) + \big(u_{[0]}(x) + c_{[1]}(x)\big)x^{64} + c_{[0]}(x) \mod P \\[6pt]
 \end{align*}
 ```
 We substitute again:
 ```math
 \begin{align*}
-(u_{1}(x) + c_{2}(x)) \cdot (x^7+x^2+x^1+1) &= \text{CLMUL}_{64}\big((u_{1}(x) + c_{2}(x)), Q(x)\big) \
-&= v_{1}(x)x^{64} + v_{0}(x) \
-&= v(x)
+v(x) &:= (u_{[1]}(x) + c_{[2]}(x)) \cdot (x^7+x^2+x^1+1) \\[6pt]
+&= \text{CLMUL}_{64}\big((u_{[1]}(x) + c_{[2]}(x)), Q(x)\big) \\[6pt]
+&= v_{[1]}(x)x^{64} + v_{[0]}(x)  \\[6pt]
 \end{align*}
 ```
+We split $v(x)$ again in two smaller polynomials. \
 Combined:
 ```math
 \begin{align*}
-c(x) &\equiv ((u_{1}(x) + c_{2}(x)) \cdot (x^7+x^2+x^1+1)) + (u_{0}(x) + c_{1}(x))x^{64} + c_{0}(x) \mod P \
-&\equiv v_{1}(x)x^{64} + v_{0}(x) + (u_{0}(x) + c_{1}(x))x^{64} + c_{0}(x) \mod P \
-&\equiv (v_{1}(x) + u_{0}(x) + c_{1}(x))x^{64} + (v_{0}(x) + c_{0}(x))
-\end{align*}
-```
-
-Intel Doc. B shows that this can be done by first calculating:
-```math
-u(x) = c_{3}(x) \cdot Q(x) = \text{CLMUL}_{64}(c_{3}(x), Q(x))
-```
-, with $Q(x) = x^7 + x^2 + x^1 + 1$. \
-Then:
-```math
-\begin{align*}
-c^*(x) &= (c_{2}(x)x^{128} + c_{1}(x)x^{64} + c_{0}(x)) + u(x)\cdot x^{64} \
-&= c^*_{2}(x)x^{128} + c^*_{1}(x)x^{64} + c^*_{0}(x) \
-&\approx c^*_{2}x^{128} + c^*_{1}x^{64} + c^*_{0}
-\end{align*}
-```
-Finally:
-```math
-\begin{align*}
-v(x) &= c^*_{2}(x) \cdot Q(x) = \text{CLMUL}_{64}(c^*_{2}(x), Q(x)) \
-Res(x) &= (c^*_{1}(x)x^{64} + c^*_{0}(x)) + v(x)
+c(x) &\equiv \big((u_{[1]}(x) + c_{[2]}(x)) \cdot (x^7+x^2+x^1+1)\big) + \big(u_{[0]}(x) + c_{[1]}(x)\big)x^{64} + c_{[0]}(x) \mod P \\[6pt]
+&\equiv v_{[1]}(x)x^{64} + v_{[0]}(x) + \big(u_{[0]}(x) + c_{[1]}(x)\big)x^{64} + c_{[0]}(x) \mod P \\[6pt]
+&\equiv \big(v_{[1]}(x) + u_{[0]}(x) + c_{[1]}(x)\big)x^{64} + (v_{[0]}(x) + c_{[0]}(x)) \\[6pt]
 \end{align*}
 ```
 
