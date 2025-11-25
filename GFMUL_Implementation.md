@@ -54,7 +54,7 @@ a(x)+b(x)&=\big(a_{127}x^{127}+a_{126}x^{126}+...+a_0x^0\big) + \big(b_{127}x^{1
 &= c(x)
 \end{align*}
 ```
-Multiplication can be implemented using first carry-less multiplication and then a reduction modulo the irreducible polynomial $P(x) := x^{128}+x^7+x^2+x^1+1$.\
+Multiplication can be implemented using first carry-less multiplication and then a reduction with modulo the irreducible polynomial $P(x) := x^{128}+x^7+x^2+x^1+1$.\
 Multiplying two polynoms with degree $\leq 127$, leads to a new polynom with degree $\leq 254$.
 This is not part of GF($2^{128}$) and must be reduced hence.
 
@@ -242,60 +242,122 @@ The complete sketch can also be viewed here:
 Image is from Doc. B.
 Please note difference in notations.
 
+### Code Implementation
+See a full code implementation below using Intel AVX instruction set
+```c
+__m128i gfmul(__m128i a, __m128i b){
+    __m128i q = _mm_set_epi32(0, 0, 0, 0x00000087);   // this corresponds to Q(x) = x^7 + x^2 + x^1 + 1
+
+    // Step 1: Multiply
+    __m128i a0b0 = _mm_clmulepi64_si128(a, b, 0x00);
+    __m128i a0b1 = _mm_clmulepi64_si128(a, b, 0x10);
+    __m128i a1b0 = _mm_clmulepi64_si128(a, b, 0x01);
+    __m128i a1b1 = _mm_clmulepi64_si128(a, b, 0x11);
+
+    __m128i mid = _mm_xor_si128(a0b1, a1b0); // computes mid = A0B1 + A1B0
+
+    __m128i c01 = _mm_xor_si128(a0b0, _mm_slli_si128(mid, 8)); // computes C[1:0] = A0B0 + (mid << x^64)
+    __m128i c23 = _mm_xor_si128(a1b1, _mm_srli_si128(mid, 8)); // computes C[3:2] = A1B1 + (mid >> x^64)
+
+    // Step 2.1: Reduce
+    __m128i x = _mm_clmulepi64_si128(a1b1, q, 0x01);  // computes C[3] * Q = upper(A1B1) * lower(Q)
+    c01 = _mm_xor_si128(c01, _mm_slli_si128(x, 8)); // add lower half of x (X[0]) to upper part of C[1:0]
+    c23 = _mm_xor_si128(c23, _mm_srli_si128(x, 8)); // add higher half of x (X[1]) to lower part of C[3:2] (higher part is just dangling around)
+
+    // Step 2.2: Reduce
+    x = _mm_clmulepi64_si128(c23, q, 0x00);         // works because higher part is not used in the calculation
+    c01 = _mm_xor_si128(c01, x);
+
+    return c01;
+}
+```
+
 ## K-Optimization
+Intel Doc. B shows how we can optimize this routine by looking at the CLMUL calculation result just before reducing with $P(x)$:
+```math
+\begin{align*}
+c(x) &\equiv \big(a_{[1]}(x)b_{[1]}(x)\big)x^{128} + \big(a_{[0]}(x)b_{[1]}(x) + a_{[1]}(x)b_{[0]}(x)\big)x^{64} + (a_{[0]}(x)b_{[0]}(x)) \mod P(x) \\[6pt]
+&\equiv \big(a_{[1]}(x)\cdot b_{[1]}(x)\cdot Q(x)\big) + \big(a_{[0]}(x)b_{[1]}(x) + a_{[1]}(x)b_{[0]}(x)\big)x^{64} + (a_{[0]}(x)b_{[0]}(x)) \mod P(x) \\[6pt]
+\end{align*}
+```
+The K-optimization is realized through knowing that in a AES-GCM execution, the encryption key does not change, and with that the GHASH key $H$ does not change.
+The routine of calculating the GHASH requires multiplying a dynamic value ($a$) with fixed variations of $H$ (e.g. $H^1, H^2, H^3, ...$).
+These values can be pre-computed and thus $b$ for multiplying is always known beforehand.
 
+Let's define $K$:
+```math
+\begin{align*}
+K(x) &:= \text{CLMUL}_{64}(b_{[1]}(x), Q(x)) \\
+&= K_{[1]}(x)x^{64} + K_{[0]}(x)
+\end{align*} 
+```
+then:
+```math
+\begin{align*}
+c(x) &\equiv \big(a_{[1]}(x)\cdot b_{[1]}(x)\cdot Q(x)\big) + \big(a_{[0]}(x)b_{[1]}(x) + a_{[1]}(x)b_{[0]}(x)\big)x^{64} + (a_{[0]}(x)b_{[0]}(x)) \mod P(x) \\[6pt]
+&\equiv \big(a_{[1]}(x)\cdot K(x)\big) + \big(a_{[0]}(x)b_{[1]}(x) + a_{[1]}(x)b_{[0]}(x)\big)x^{64} + (a_{[0]}(x)b_{[0]}(x)) \mod P(x) \\[6pt]
+&\equiv \big(a_{[1]}(x)\cdot (K_{[1]}(x)x^{64} + K_{[0]}(x))\big) + \big(a_{[0]}(x)b_{[1]}(x) + a_{[1]}(x)b_{[0]}(x)\big)x^{64} + (a_{[0]}(x)b_{[0]}(x)) \mod P(x) \\[6pt]
+&\equiv (a_{[1]}(x)K_{[1]}(x))x^{64} + (a_{[1]}(x)K_{[0]}(x)) + \big(a_{[0]}(x)b_{[1]}(x) + a_{[1]}(x)b_{[0]}(x)\big)x^{64} + (a_{[0]}(x)b_{[0]}(x)) \mod P(x) \\[6pt]
+\end{align*}
+```
+With that, $c(x)$ has already been reduced such that the polynomial's degree $\leq 192$, and thus only one more reduction is required. \
+```math
+c(x) \equiv c_{[2]}(x)x^{128} + c_{[1]}(x)x^{64} + c_{[0]}(x) \mod P(x) \
+```
+Additionally, since:
+```math
+\begin{align*}
+c(x) &\equiv \big((a_{[1]}(x)K_{[1]}(x))x^{64} + (a_{[1]}(x)K_{[0]}(x))\big) + \big(a_{[0]}(x)b_{[1]}(x) + a_{[1]}(x)b_{[0]}(x)\big)x^{64} + (a_{[0]}(x)b_{[0]}(x)) \mod P(x) \\[6pt]
+&\equiv \big(a_{[1]}(x)K_{[1]}(x) + a_{[0]}(x)b_{[1]}(x) + a_{[1]}(x)b_{[0]}(x)\big)x^{64} + (a_{[1]}(x)K_{[0]}(x)) + (a_{[0]}(x)b_{[0]}(x)) \mod P(x) \\[6pt]
+&\equiv \big(a_{[1]}(x)\cdot (K_{[1]}(x) + b_{[0]}(x))\big)x^{64} + (a_{[0]}(x)b_{[1]}(x))x^{64} + (a_{[1]}(x)K_{[0]}(x)) + (a_{[0]}(x)b_{[0]}(x)) \mod P(x) \\[6pt]
+\end{align*}
+```
+Hence, if we update $K$ to:
+```math
+\begin{align*}
+K^{*}(x) &:= \text{CLMUL}_{64}(b_{[1]}(x), Q(x)) + b_{[0]}(x)x^{64} \\[4pt]
+&= K^{*}_{[1]}(x)x^{64} + K^{*}_{[0]}(x)
+\end{align*}
+```
+the equation is further reduced to:
+```math
+c(x) \equiv \big((a_{[1]}(x)K^{*}_{[1]}(x)) + (a_{[0]}(x)b_{[1]}(x))\big)x^{64} + (a_{[1]}(x)K^{*}_{[0]}(x)) + (a_{[0]}(x)b_{[0]}(x)) \mod P(x)
+```
+While still requiring one reduction, it also requires one less $\text{CLMUL}_{64}$ invocation by extended pre-computing of $K^{*}(x)$.
 
+This complete sketch can be viewed here:
+<img width="1040" height="1208" alt="grafik" src="https://github.com/user-attachments/assets/16216fce-53ff-4335-b60b-056e7838bcbd" />
 
-# First Level Heading
+Again this image is also from Doc. B. 
+Please note the different notation scheme.
+The $K$ used in the image corresponds to our $K^{*}(x)$.
 
-Paragraph.
+### Code Implementation
+See a full code implementation below using Intel AVX instruction set which calculates $K^{*}(x)$ (`k`) every invocation.
+```c
+__m128i gfmul_k_optimized(__m128i a, __m128i b){
+    // Step 0: Pre-requesites
+    __m128i q = _mm_set_epi32(0, 0, 0, 0x00000087);   // this corresponds to Q(x) = x^7 + x^2 + x^1 + 1
+    __m128i k = _mm_xor_si128(_mm_clmulepi64_si128(b, q, 0x01), _mm_slli_si128(b, 8)); // K = CLMUL(B[1], Q) + B[0]*x^64
 
-## Second Level Heading
+    // Step 1: Multiply
+    __m128i a0b0 = _mm_clmulepi64_si128(a, b, 0x00);
+    __m128i a0b1 = _mm_clmulepi64_si128(a, b, 0x10);
+    __m128i a1k0 = _mm_clmulepi64_si128(a, k, 0x01);
+    __m128i a1k1 = _mm_clmulepi64_si128(a, k, 0x11);
 
-Paragraph.
+    __m128i lower  = _mm_xor_si128(a0b0, a1k0);     // computes lower  = a0b0 + a1k0
+    __m128i higher = _mm_xor_si128(a0b1, a1k1);     // computes higher = a0b1 + a1k1
 
-- bullet
-+ other bullet
-* another bullet
-    * child bullet
+    __m128i c01 = _mm_xor_si128(lower, _mm_slli_si128(higher, 8));  // c01 = lower + (higher << 64)
+    __m128i c23 = _mm_srli_si128(higher, 8);                        // c02 = higher >> 64           (highest 64 bits are 0)
 
-1. ordered
-2. next ordered
+    // Step 2: Reduce
+    __m128i x = _mm_clmulepi64_si128(c23, q, 0x00);
+    c01 = _mm_xor_si128(x, c01);
 
-### Third Level Heading
-
-Some *italic* and **bold** text and `inline code`.
-
-An empty line starts a new paragraph.
-
-Use two spaces at the end  
-to force a line break.
-
-A horizontal ruler follows:
-
----
-
-Add links inline like [this link to the Qt homepage](https://www.qt.io),
-or with a reference like [this other link to the Qt homepage][1].
-
-    Add code blocks with
-    four spaces at the front.
-
-> A blockquote
-> starts with >
->
-> and has the same paragraph rules as normal text.
-
-First Level Heading in Alternate Style
-======================================
-
-Paragraph.
-
-Second Level Heading in Alternate Style
----------------------------------------
-
-Paragraph.
-
-[1]: https://www.qt.io
+    return c01;
+}
+```
 
 ## GHASH capable GFMUL implementation
