@@ -361,3 +361,126 @@ __m128i gfmul_k_optimized(__m128i a, __m128i b){
 ```
 
 ## GHASH capable GFMUL implementation
+Now that we have two functional versions of computing the multiplication of two GF($2^{128}$) elements, let's see how we can use it inside the GHASH calculation required for AES-GCM.
+
+The NIST specification declares that their polynomials are stored exactly the opposite way round of how we store them. 
+- We stored $Q(x) = x^7 + x^2 + x^1 + 1$ as follows: `__m128i q = _mm_set_epi32(0, 0, 0, 0x00000087);` (0..010000111)
+- NIST specifies it the other way round: `__m128i q = _mm_set_epi32(0xc2000000, 0, 0, 0);` (111000010..0)
+
+Thus, to convert our currently used polynomials to abide to the NIST specification, we have to apply the bit reflection transformation: $R(..)$ [see the mathematical section](#bit-reflection).
+
+Given a block of actual AES-GCM data $(a(x))$ and the GHASH key $H$ $(b(x))$, in order to compute their galois-field multiplication result $(d(x))$, we would have to do:
+```math
+d(x) := R\big(\text{GFMUL}(R(a(x)), R(b(x)))\big)
+```
+where $\text{GFMUL}$ could be either our standard or the K-optimized implementation.
+
+To avoid costly bit-reflection, we can use the CLMUL-identity which simply states:
+```math
+\text{CLMUL}\big(R_{128}(a(x)), R_{128}(b(x))\big) = R_{256}\big(\text{CLMUL}(a(x), b(x)) << 1\big) 
+```
+Thus:
+```math
+\begin{align*}
+d(x) &= R\big(\text{GFMUL}(R(a(x)), R(b()))\big) \\[6pt]
+&= R_{128}\Big(\text{CLMUL}(R_{128}(a(x)), R_{128}(b(x))) \mod P(x)\Big) \\[6pt]
+&\equiv R_{128}\Big(R_{256}\big(\text{CLMUL}(a(x), b(x)) << 1\big) \mod P(x)\Big) \\[6pt]
+\end{align*}
+```
+If we draw in the outer $R_{128}$ from left to right, $R_{256}$ drops out, because $R(..)$ is self-inverse:
+```math
+\begin{align*}
+P_{r}(x) &:= R_{128}(P(x)) \\[4pt]
+&= x^{128}P(x^{-1}) \\[4pt]
+&= x^{128}(x^{-128}+x^{-7}+x^{-2}+x^{-1}+x^{-0}) \\[4pt]
+&= x^{0} + x^{121} + x^{126} + x^{127} + x^{128} \\[4pt]
+&= x^{128} + x^{127} + x^{126} + x^{121} + 1 \\[4pt]
+\end{align*}
+```
+Thus:
+```math
+\begin{align*}
+d(x) &\equiv \Big(\big(\text{CLMUL}(a(x), b(x)) << 1\big) \mod R_{128}(P(x)\Big) \\[6pt]
+&\equiv \Big(\big(\text{CLMUL}(a(x), b(x)) << 1\big) \mod (P_{r}(x)\Big) \\[6pt]
+\end{align*}
+```
+If we define $z(x) := \text{CLMUL}(a(x), b(x))$, it is a polynomial of degree at most 254 (127*127) and can be split into sub-polynomials agains:
+```math
+\begin{align*}
+z(x) &:= \text{CLMUL}(a(x), b(x)) \\[6pt]
+&= z_{[3]}(x)x^{192} + z_{[2]}(x)x^{128} + z_{[1]}(x)x^{64} + z_{[0]}(x) \\[6pt]
+\end{align*}
+```
+, where $z_{\[2..0\]}(x)$ are polynomials with degree $\leq 63$, but $z_{\[3\]}(x)$ is a polynomial with degree $\leq 62$.
+Now, if we shift it by one to the left:
+```math
+\begin{align*}
+z^{*}(x) &= z(x) << 1 \\[6pt]
+&= \big(z_{[3]}(x)x^{192} + z_{[2]}(x)x^{128} + z_{[1]]}(x)x^{64} + z_{[0]}(x)\big)\cdot x \\[6pt]
+&= z_{[3]}(x)x^{193} + z_{[2]}(x)x^{129} + z_{[1]]}(x)x^{65} + z_{[0]}(x)x^{1} +0x^{0}
+\end{align*}
+```
+The degree of the polynomial $z^{*}(x)$ is $\leq 255$, therefore it still fits in a single 256bit value.
+Additionally, we can still split it up into four sub-polynomials, such that we extract $x^{192}$ and $x^{128}$:
+```math
+\begin{align*}
+z^{*}(x) &= z_{[3]}(x)x^{193} + z_{[2]}(x)x^{129} + z_{[1]]}(x)x^{65} + z_{[0]}(x)x^{1} +0x^{0} \\[6pt] 
+&= z^{*}_{[3]}(x)x^{192} + z^{*}_{[2]}(x)x^{128} + z^{*}_{[1]}(x)x^{64} + z^{*}_{[0]}(x) \\[6pt]
+\end{align*}
+```
+Now, when putting it back into $d(x)$, we can reduce the terms.
+Interestingly, for some for me unknown reason, we do not multiply $`Q_{r}(x)`$ with $`z^{*}_{[3]}(x)`$ but rather with $`z^{*}_{[0]}(x)`$ and do the folding from the right hand side.
+I suspect this to be due to some bit-reflection peculiarity.
+
+This complete sketch can be viewed here:
+<img width="900" height="1246" alt="grafik" src="https://github.com/user-attachments/assets/f8684b06-6229-4757-a222-b9e2ebbffac7" />
+
+Please again note the different notation.
+Even though the picture uses $A'$ and $B'$, they are in fact our plain $a(x)$ and $b(x)$, and the result is our usable GHASH result.
+
+### Code Implementation
+See a full code implementation below using Intel AVX instruction set:
+```c
+_m128i gfmul_reversed_bl_opt(__m128i a, __m128i b){
+    __m128i Q_r = _mm_set_epi32(0, 0, 0xc2000000, 0);   // Q_r = x^127+x^126+x^121
+
+    // Step 1: Multiply
+    __m128i a0b0 = _mm_clmulepi64_si128(a, b, 0x00);
+    __m128i a0b1 = _mm_clmulepi64_si128(a, b, 0x10);
+    __m128i a1b0 = _mm_clmulepi64_si128(a, b, 0x01);
+    __m128i a1b1 = _mm_clmulepi64_si128(a, b, 0x11);
+
+    __m128i mid = _mm_xor_si128(a0b1, a1b0);      // computes mid = A0B1 + A1B0
+
+    __m128i c01 = _mm_xor_si128(a0b0, _mm_slli_si128(mid, 8));    // computes C[1:0] = A0B0 + (mid << x^64)
+    __m128i c23 = _mm_xor_si128(a1b1, _mm_srli_si128(mid, 8));    // computes C[3:2] = A1B1 + (mid >> x^64)
+
+    // Step 1.1: Bitshift << 1
+    __m128i tmp7,tmp8,tmp9;
+    tmp7 = _mm_srli_epi32(c01, 31);
+    tmp8 = _mm_srli_epi32(c23, 31);
+    c01 = _mm_slli_epi32(c01, 1);
+    c23 = _mm_slli_epi32(c23, 1);
+    tmp9 = _mm_srli_si128(tmp7, 12);
+    tmp8 = _mm_slli_si128(tmp8, 4);
+    tmp7 = _mm_slli_si128(tmp7, 4);
+    c01 = _mm_or_si128(c01, tmp7);
+    c23 = _mm_or_si128(c23, tmp8);
+    c23 = _mm_or_si128(c23, tmp9);
+
+
+    // Step 2.1: Reduce C[0]
+    __m128i x = _mm_clmulepi64_si128(c01, Q_r, 0x00);
+    c23 = _mm_xor_si128(c23, _mm_srli_si128(x, 8));       // add higher half of x (X[1]) to lower part of C[3:2]
+    c23 = _mm_xor_si128(c23, _mm_unpacklo_epi64(c01, ZERO));    // add only C[0] to lower part of C[3:2]  (zeroing out C[1]) (this corresponds to the x^0 part of Q_r)
+
+    c01 = _mm_xor_si128(c01, _mm_slli_si128(x, 8));       // add lower half of x (X[0]) to upper part of C[1:0]
+
+    // Step 2.2: Reduce C[1]
+    x = _mm_clmulepi64_si128(c01, Q_r, 0x01);               // computes C[1] * Q = higher(C[1:0]) * lower(Q)
+    c23 = _mm_xor_si128(c23, x);                          // add full X on C[3:2]
+    c23 = _mm_xor_si128(c23, _mm_unpackhi_epi64(ZERO, c01)); // add C[1] on higher C[3:2] (zeroing out C[0]) (this corresponds to the x^0 part of Q_r)
+
+    return c23;
+}
+```
