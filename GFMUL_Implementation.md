@@ -136,6 +136,32 @@ R_{129}(P(x)) &= x^{128} \cdot (x^{-128}+x^{-7}+x^{-2}+x^{-1}+x^{-0}) \
 &= x^{128} + x^{127}+x^{126}+x^{121}+1
 \end{align*}
 ```
+----
+To reflect a polynomial of degree $=127$ (`__m128i` value), one can use the following code (Source: Intel Doc. A):
+<details>
+<summary>Show code</summary>
+
+```c
+__m128i reflect_xmm(__m128i X){
+    __m128i tmp1,tmp2;
+    __m128i AND_MASK =
+        _mm_set_epi32(0x0f0f0f0f, 0x0f0f0f0f, 0x0f0f0f0f, 0x0f0f0f0f);
+    __m128i LOWER_MASK =
+        _mm_set_epi32(0x0f070b03, 0x0d050901, 0x0e060a02, 0x0c040800);
+    __m128i HIGHER_MASK =
+        _mm_set_epi32(0xf070b030, 0xd0509010, 0xe060a020, 0xc0408000);
+    __m128i BSWAP_MASK =
+        _mm_set_epi8(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15);
+    tmp2 = _mm_srli_epi16(X, 4);        // splits the string into 8x 16bit words (e.g. [0xABCD]). Each is >> 4, resulting in [0x0ABC]. This masked with [0x0f0f], gives [0x0A0C] directly resembling the higher nimbles.
+    tmp1 = _mm_and_si128(X, AND_MASK);
+    tmp2 = _mm_and_si128(tmp2, AND_MASK);
+    tmp1 = _mm_shuffle_epi8(HIGHER_MASK ,tmp1);
+    tmp2 = _mm_shuffle_epi8(LOWER_MASK ,tmp2);
+    tmp1 = _mm_xor_si128(tmp1, tmp2);
+    return _mm_shuffle_epi8(tmp1, BSWAP_MASK);
+};
+```
+</details>
 
 ### CLMUL Identity
 This following identity is crucial for implementing a correct gfmul implementation usable for GHASH.
