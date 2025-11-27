@@ -300,9 +300,9 @@ c(x) &\equiv \big(a_{[1]}(x)\cdot b_{[1]}(x)\cdot Q(x)\big) + \big(a_{[0]}(x)b_{
 &\equiv (a_{[1]}(x)K_{[1]}(x))x^{64} + (a_{[1]}(x)K_{[0]}(x)) + \big(a_{[0]}(x)b_{[1]}(x) + a_{[1]}(x)b_{[0]}(x)\big)x^{64} + (a_{[0]}(x)b_{[0]}(x)) \mod P(x) \\[6pt]
 \end{align*}
 ```
-With that, $c(x)$ has already been reduced such that the polynomial's degree $\leq 192$, and thus only one more reduction is required. \
+With that, $c(x)$ has already been reduced such that the polynomial's degree $\leq 192$, and thus only one more reduction is required.
 ```math
-c(x) \equiv c_{[2]}(x)x^{128} + c_{[1]}(x)x^{64} + c_{[0]}(x) \mod P(x) \
+c(x) \equiv c_{[2]}(x)x^{128} + c_{[1]}(x)x^{64} + c_{[0]}(x) \mod P(x)
 ```
 Additionally, since:
 ```math
