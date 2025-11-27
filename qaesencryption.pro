@@ -30,6 +30,7 @@ HEADERS += \
     aesni/aesni-key-init.h \
     gcm/benchmarkutil.h \
     gcm/gcm.h \
+    gcm/gfmul.h \
     qaesencryption.h \
     aesni/aesni-key-exp.h \
     aesni/aesni-enc-ecb.h \
@@ -38,8 +39,12 @@ HEADERS += \
 
 SOURCES += main.cpp \
     gcm/gcm.cpp \
+    gcm/gfmul.cpp \
     qaesencryption.cpp \
     unit_test/aestest.cpp
 
 RESOURCES += \
     res.qrc
+
+DISTFILES += \
+    GFMUL_Implementation.md

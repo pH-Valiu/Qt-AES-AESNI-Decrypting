@@ -1,6 +1,6 @@
 #include <QCoreApplication>
 #include <QTest>
-#include "gcm/gcm.h"
+#include "gcm/gfmul.h"
 
 #ifdef __cplusplus
 #include "unit_test/aestest.h"
