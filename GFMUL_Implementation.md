@@ -39,7 +39,7 @@ or:
 a(x) = 1x^{127} + 0x^{126} + ... + 0x^0
 ```
 This exactly boils down to the difference between the "classical/naive" GFMUL implementation and the GHASH necessary implementation.
-Therefore, in order to stay consistent, we define that the polynom $b = 0x^{127}+...+0x^1+1x^0$ can be expressed with this variable 
+Therefore, in order to stay consistent for the "normal" approach, we define that the polynom $b = 0x^{127}+...+0x^1+1x^0$ can be expressed with this variable 
 ```
 __m128i b = _mm_set_epi32(0, 0, 0, 0x00000001);
 ```
@@ -60,7 +60,7 @@ This is not part of GF($2^{128}$) and must be reduced hence.
 
 ### Splitting polynomials
 This routine and technique is important for the following algorithm. \
-Whenever we have a polynomial of degree $n-1$, we can split it up into $p$ smaller equally sized polynomials, if $p|n$ (p is divisor of n), where each smaller polynomial is of max degree $k = \frac{n}{p}$.
+Whenever we have a polynomial $f(x)$ of degree $n-1$, we can split it up into $p$ smaller equally sized polynomials $`f_{[j]}(x)`$, if $p|n$ (p is divisor of n), where each smaller polynomial is of max degree $k = \frac{n}{p}$.
 ```math
 f(x) := \sum_{j=0}^{p}{f_{[j]}(x)x^{k\cdot j}}
 ```
@@ -86,7 +86,7 @@ a(x) := a_{[1]}(x)x^{64} + a_{[0]}(x) \
 b(x) := b_{[1]}(x)x^{64} + b_{[0]}(x)
 \end{align*}
 ```
-This is because, we can not directly compute `CLMUL(a(x), b(x))`, but instead we can only multiply polynomials with degree $\leq 63$ (`$\text{CLMUL}_{64}$` --> `_mm_clmulepi64_si128()`)  yielding a polynomial of degree $\leq 255$.\
+This is because, we can not directly compute `CLMUL(a(x), b(x))`, but instead we can only multiply polynomials with degree $\leq 63$ ($`\text{CLMUL}_{64}\rightarrow`$ `_mm_clmulepi64_si128()`)  yielding a polynomial of degree $\leq 255$.\
 Thus:
 ```math
 \begin{align*}
@@ -102,7 +102,7 @@ or written more cleanly (but not mathematically correct):
 
 ### Bit-Reflection
 Because it is needed later on:
-The bit-reflection transformation R is defined as follows for polynoms with degree $\leq 127$:
+The bit-reflection transformation R is defined as follows for polynoms with degree $= 127$:
 ```math
 R_{128}(a(x)) := x^{127}\cdot a(x^{-1})
 ```
@@ -127,7 +127,7 @@ In CS variable notation:
 __m128i a      = _mm_set_epi32(0x20000000, 0x00000001, 0x80000000, 0x00000003);
 __m128i a_refl = _mm_set_epi32(0xc0000000, 0x00000001, 0x80000000, 0x00000004);
 ```
-Let's apply this on the irreducible polynomial P (will be useful later):
+Let's apply this on the irreducible polynomial P $(n=129)$ (will be useful later):
 ```math
 \begin{align*}
 P(x) &:= x^{128} + x^7 + x^2 + x^1 + 1 \\[6pt]
@@ -364,14 +364,15 @@ __m128i gfmul_k_optimized(__m128i a, __m128i b){
 Now that we have two functional versions of computing the multiplication of two GF($2^{128}$) elements, let's see how we can use it inside the GHASH calculation required for AES-GCM.
 
 The NIST specification declares that their polynomials are stored exactly the opposite way round of how we store them. 
-- We stored $Q(x) = x^7 + x^2 + x^1 + 1$ as follows: `__m128i q = _mm_set_epi32(0, 0, 0, 0x00000087);` (0..010000111)
-- NIST specifies it the other way round: `__m128i q = _mm_set_epi32(0xc2000000, 0, 0, 0);` (111000010..0)
+- We store $h(x) = x^3 + x^2 + x^1$ as follows: `__m128i h = _mm_set_epi32(0, 0, 0, 0x0000000e);` (0..000001110)
+- NIST specifies it the other way round: `__m128i h = _mm_set_epi32(0x70000000, 0, 0, 0);` (01110000..0)
+and that all GHASH operations happen on bit-reflected values.
 
 Thus, to convert our currently used polynomials to abide to the NIST specification, we have to apply the bit reflection transformation: $R(..)$ [see the mathematical section](#bit-reflection).
 
-Given a block of actual AES-GCM data $(a(x))$ and the GHASH key $H$ $(b(x))$, in order to compute their galois-field multiplication result $(d(x))$, we would have to do:
+Given a block of actual AES-GCM data $\big(a(x)\big)$ and the GHASH key $H$ $\big(b(x)\big)$, in order to compute their galois-field multiplication result $\big(d(x)\big)$, we would have to do:
 ```math
-d(x) := R\big(\text{GFMUL}(R(a(x)), R(b(x)))\big)
+d(x) := R\Big(\text{GFMUL}\big(R(a(x)), R(b(x))\big)\Big)
 ```
 where $\text{GFMUL}$ could be either our standard or the K-optimized implementation.
 
@@ -379,58 +380,89 @@ To avoid costly bit-reflection, we can use the CLMUL-identity which simply state
 ```math
 \text{CLMUL}\big(R_{128}(a(x)), R_{128}(b(x))\big) = R_{256}\big(\text{CLMUL}(a(x), b(x)) << 1\big) 
 ```
+(under the assumption that $\text{CLMUL(a(x), b(x)) << 1}$ results in a polynomial of degree $255$, which is the maximum possible for that calculation and that $a(x)$ and $b(x)$ have coefficients $=0$ for all remaining terms if their degree is $\le 127$).
+
+Important note: The following mathematical inscription of the operation might not be 100% correct and therefore contain some magic and inconsistencies.
+It arouse from trying to understand the algorihm in "Table 9" in Intel Doc. B.
+And this part is not actually complete but it might give hints on how to get to the final result.
+
+Therefore, Applying the bit-reflection transformation on a polynomial, when simply writing $R(..)$, the chosen $n$ might dynamically expand to the needed resolution.
+E.g.: Even though we write $R_{128}\Big(R_{256}\big(\text{CLMUL}(a(x), b(x)) << 1\big) \mod P(x)\Big)$, indicating that $R_{128}$ is applied on $P(x)$, applying $R_{129}$ fits our case better, especially since the degree of $P(x)$ is $128 \rightarrow n=129$.
 Thus:
 ```math
 \begin{align*}
-d(x) &= R\big(\text{GFMUL}(R(a(x)), R(b()))\big) \\[6pt]
-&= R_{128}\Big(\text{CLMUL}(R_{128}(a(x)), R_{128}(b(x))) \mod P(x)\Big) \\[6pt]
+d(x) &= R\Big(\text{GFMUL}\big(R(a(x)), R(b(x))\big)\Big) \\[6pt]
+&= R_{128}\Big(\text{CLMUL}\big(R_{128}(a(x)), R_{128}(b(x))\big) \mod P(x)\Big) \\[6pt]
 &\equiv R_{128}\Big(R_{256}\big(\text{CLMUL}(a(x), b(x)) << 1\big) \mod P(x)\Big) \\[6pt]
 \end{align*}
 ```
-If we draw in the outer $R_{128}$ from left to right, $R_{256}$ drops out, because $R(..)$ is self-inverse:
+Say:
 ```math
 \begin{align*}
-P_{r}(x) &:= R_{128}(P(x)) \\[4pt]
-&= x^{128}P(x^{-1}) \\[4pt]
-&= x^{128}(x^{-128}+x^{-7}+x^{-2}+x^{-1}+x^{-0}) \\[4pt]
-&= x^{0} + x^{121} + x^{126} + x^{127} + x^{128} \\[4pt]
-&= x^{128} + x^{127} + x^{126} + x^{121} + 1 \\[4pt]
+c^{*}(x) &= CLMUL(a(x), b(x)) << 1 \\[6pt]
+&= c(x) << 1\\[6pt]
+&= (c_{[3]}(x)x^{192} + c_{[2]}(x)x^{128} + c_{[1]}(x)x^{64} + c_{[0]}(x)) \cdot x \\[6pt]
+&= c_{[3]}(x)x^{193} + c_{[2]}(x)x^{129} + c_{[1]}(x)x^{65} + c_{[0]}(x)x \\[6pt]
+&= c^{*}_{[3]}(x)x^{192} + c^{*}_{[2]}(x)x^{128} + c^{*}_{[2]}(x)x^{64} + c^{*}_{[0]}(x) \\[6pt]
 \end{align*}
 ```
-Thus:
+where all $`c^{*}_{[i]}(x)`$ polynomials are of degree $\leq 63$, because the degree of $`c_{[3]}(x)`$ is $\leq$ 62$.\
+Now, let's define: 
+```math
+A(x) := x^{255}c^{*}(x^{-1}) = x^{255}(\text{CLMUL}(a, b) << 1)(x^{-1})
+```
+and let $B$ be the remainder: 
+```math
+B(x) := A(x) \mod P(x)
+```
+Thus $A(x)$ can also be written in the following way for an unknown $L(x)$: 
+```math
+A(x) = P(x)\cdot L(x) + B(x)
+```
+It follows:
+```math
+B(x) = A(x) - P(x)\cdot L(x)
+```
+Let's insert this into the other equation from before:
 ```math
 \begin{align*}
-d(x) &\equiv \Big(\big(\text{CLMUL}(a(x), b(x)) << 1\big) \mod R_{128}(P(x)\Big) \\[6pt]
-&\equiv \Big(\big(\text{CLMUL}(a(x), b(x)) << 1\big) \mod (P_{r}(x)\Big) \\[6pt]
+d(x) &= R_{128}\big(R_{255}(c^{*})(x^{-1} \mod P(x)\big) \\[6pt]
+&\equiv R_{128}(B)(x) \\[6pt]
+&\equiv x^{127}B(x^{-1}) \\[6pt]
+&\equiv x^{127}(A - P\cdot L)(x^{-1}) \\[6pt]
+&\equiv x^{127}A(x^{-1}) - x^{128}P(x^{-1})L(x^{-1}) \\[6pt]
+&\equiv x^{127}x^{-255}c^{*}(x) - x^{128}P(x^{-1})L(x^{-1}) \\[6pt]
+&\equiv x^{-128}c^{*}(x) - x^{128}(x^{-128} + x^{-7} + x^{-2} + x^{-1} + x^{-0})L(x^{-1}) \\[6pt]
+&\equiv x^{-128}(c^{*}_{[3]}(x)x^{192} + c^{*}_{[2]}(x)x^{128} + c^{*}_{[1]}(x)x^{64} + c^{*}_{[0]}(x)) - (x^{0} + x^{121} + x^{126} + x^{127} + x^{128})L(x^{-1}) \\[6pt]
+&\equiv (c^{*}_{[3]}(x)x^{64} + c^{*}_{[2]}(x)x^{0} + c^{*}_{[1]}(x)x^{-64} + c^{*}_{[0]}(x)x^{-128} - P_{r}(x)L(x{^-1}) \\[6pt]
 \end{align*}
 ```
-If we define $z(x) := \text{CLMUL}(a(x), b(x))$, it is a polynomial of degree at most 254 (127*127) and can be split into sub-polynomials agains:
+where the change from $x^{127}$ to $x^{128}$ for applying on $P(x)$ is some magic, and with $P_{r}(x) = x^{128} + x^{127} + x^{126} + x^{121} + 1$.
+This is all the mathematics I was able to deduce.
+
+One important note as for the memory representation:<br>
+Say we store:
 ```math
 \begin{align*}
-z(x) &:= \text{CLMUL}(a(x), b(x)) \\[6pt]
-&= z_{[3]}(x)x^{192} + z_{[2]}(x)x^{128} + z_{[1]}(x)x^{64} + z_{[0]}(x) \\[6pt]
+c(x) &= c_{[3]}(x)x^{192} + c_{[2]}(x)x^{128} + c_{127}x^{127} + c_{126}x^{126} + ... + c_{64}x^{64} + c_{63}x^{63} + ... + c_{0}x^{0} \\[8pt]
+c_{[1]}(x) &= c_{127}x^{127} + c_{126}x^{127} + ... c_{64}x^{64} \\[8pt]
+c_{[0]}(x) &= c_{63}x^{63} + ... + c_{0}x^{0} \\[8pt]
 \end{align*}
 ```
-, where $z_{\[2..0\]}(x)$ are polynomials with degree $\leq 63$, but $z_{\[3\]}(x)$ is a polynomial with degree $\leq 62$.
-Now, if we shift it by one to the left:
-```math
-\begin{align*}
-z^{*}(x) &= z(x) << 1 \\[6pt]
-&= \big(z_{[3]}(x)x^{192} + z_{[2]}(x)x^{128} + z_{[1]]}(x)x^{64} + z_{[0]}(x)\big)\cdot x \\[6pt]
-&= z_{[3]}(x)x^{193} + z_{[2]}(x)x^{129} + z_{[1]]}(x)x^{65} + z_{[0]}(x)x^{1} +0x^{0}
-\end{align*}
-```
-The degree of the polynomial $z^{*}(x)$ is $\leq 255$, therefore it still fits in a single 256bit value.
-Additionally, we can still split it up into four sub-polynomials, such that we extract $x^{192}$ and $x^{128}$:
-```math
-\begin{align*}
-z^{*}(x) &= z_{[3]}(x)x^{193} + z_{[2]}(x)x^{129} + z_{[1]]}(x)x^{65} + z_{[0]}(x)x^{1} +0x^{0} \\[6pt] 
-&= z^{*}_{[3]}(x)x^{192} + z^{*}_{[2]}(x)x^{128} + z^{*}_{[1]}(x)x^{64} + z^{*}_{[0]}(x) \\[6pt]
-\end{align*}
-```
-Now, when putting it back into $d(x)$, we can reduce the terms.
-Interestingly, for some for me unknown reason, we do not multiply $`Q_{r}(x)`$ with $`z^{*}_{[3]}(x)`$ but rather with $`z^{*}_{[0]}(x)`$ and do the folding from the right hand side.
-I suspect this to be due to some bit-reflection peculiarity.
+in memory as follows: `__m128i c = _mm_set_epi32(c3, c2, c1, c0);`.
+Then after applying the bitshift to the left, **of** the original coefficients of `c0` corresponding to $c_{\[0\]}(x)$, the highest coefficient $c_{63}$ now resides in the second word, `c1`. $(c_{63}x^{63} \cdot x = c_{63}x^{64})$
+Therefore, after the bitshift, `c0` does not correspond to $c_{\[0\]}(x)$ anymore.<br>
+But, when looking at $`c^{*}(x) = c^{*}_{[3]}(x)x^{192} + c^{*}_{[2]}(x)x^{128} + c^{*}_{[1]}(x)x^{64} + c^{*}_{[0]}(x)`$, then $`c^{*}_{[0]}(x)`$ does correspond to `c0` again correctly.
+
+-----
+
+So much for the mathematics part.<br>
+Our used implementation retrieved from Intel Doc.B with the small addition of shifting `C[3:0]` one to the left before applying the reduction (NECESSARY), can be seen in the following picture.
+It does though not align perfectly with the maths, or at least I haven't seen how to get from one to the other yet.
+
+The difference:
+- We multiply $`Q'(x) := x^{127} + x^{126} + x^{121}`$ with `C'[0]` (being our $`c^{*}_{[0]}(x)`$), add it onto `C'[3:1]` and also add `C'[0]*x^64`. (This part might come from the $+1$ in $P_{r}(x)$).
+- We repeat this step for the remaining part to then get our final result.
 
 This complete sketch can be viewed here:
 <img width="900" height="1246" alt="grafik" src="https://github.com/user-attachments/assets/f8684b06-6229-4757-a222-b9e2ebbffac7" />
@@ -442,7 +474,7 @@ Even though the picture uses $A'$ and $B'$, they are in fact our plain $a(x)$ an
 See a full code implementation below using Intel AVX instruction set:
 ```c
 _m128i gfmul_reversed_bl_opt(__m128i a, __m128i b){
-    __m128i Q_r = _mm_set_epi32(0, 0, 0xc2000000, 0);   // Q_r = x^127+x^126+x^121
+    __m128i Q_r = _mm_set_epi32(0, 0, 0xc2000000, 0);   // Q' = Q_r = x^127+x^126+x^121
 
     // Step 1: Multiply
     __m128i a0b0 = _mm_clmulepi64_si128(a, b, 0x00);
