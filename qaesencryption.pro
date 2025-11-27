@@ -17,9 +17,10 @@ DEFINES += QT_DEPRECATED_WARNINGS
 
 DEFINES += USE_INTEL_AES_IF_AVAILABLE
 QMAKE_CXXFLAGS += \
-    -maes \
-    -mssse3 \
-    -march=native       # this is quick include isntead of mssse2 & mssse3 TODO refine this for release
+    -maes \             # enable AES-NI instruction set
+    -mpclmul \          # enable Carry-Less multiply
+    -mavx2 \            # enable AVX2 instruction set
+    #-mssse3             # enable SSSE3 instruction set. Might be useful or necessary for AES-NI (mssse2 is default in x64/64)
 
 # You can also make your code fail to compile if you use deprecated APIs.
 # In order to do so, uncomment the following line.

@@ -1,16 +1,41 @@
 #include <gcm/gcm.h>
+#include <aesni/aesni-key-init.h>
+#include <qaesencryption.h>
 #include <QDebug>
 #include <QString>
 
-#include <cpuid.h>
-#include <iostream>
-
-bool hasSSSE3() {
-    unsigned int eax, ebx, ecx, edx;
-    if (__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
-        return (ecx & bit_SSSE3);
+void singleAESBlock(const unsigned char* in, unsigned char* out, const unsigned char* key, int number_of_rounds){
+    __m128i tmp = _mm_loadu_si128((__m128i*) in);
+    tmp = _mm_xor_si128(tmp, ((__m128i*)key)[0]);
+    for(int i=1; i<number_of_rounds; i++){
+        tmp = _mm_aesenc_si128(tmp, ((__m128i*)key)[i]);
     }
-    return false;
+    tmp = _mm_aesenclast_si128(tmp, ((__m128i*)key)[number_of_rounds]);
+    _mm_storeu_si128((__m128i*)out, tmp);
+}
+
+struct GCM_OUT encrypt(const QByteArray &key, const QByteArray &iv, const QByteArray &aad, const QByteArray &p){
+    // 0.1: Check instruction set support
+    if(!(hasAES() && hasAVX2() && hasPCLMUL())) {
+        throw std::runtime_error("CPU does not support required AES-GCM instructions (AES-NI, PCLMUL, AVX2");
+    }
+
+    // 0.2: Check max lengths of paramteres following NIST specification (NIST 800-38d)
+    if(key.length() != gcm_keyLength || iv.isEmpty() || iv.length() > MAX_IV_LEN || aad.length() > MAX_AAD_LEN || p.length() > MAX_PLAIN_LEN) {
+        return GCM_OUT();
+    }
+
+    // 1. Key Expansion
+    AES_KEY aesKey;
+    AES_set_encrypt_key((unsigned char*) key.constData(), gcm_keyLengthBits, &aesKey);
+    QByteArray expKey = QByteArray::fromRawData((const char*) aesKey.KEY, gcm_expKeyLength);    // bc expKey is fromRawData, we must not delete aesKey, because expKey contains the data pointer of aesKey. but killing expKey will not kill the key inside
+
+    // 2. IV Expansion
+
+
+
+    return GCM_OUT();
+
 }
 
 

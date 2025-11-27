@@ -9,11 +9,11 @@
 int main(int argc, char *argv[])
 {
     QCoreApplication a(argc, argv);
+    gfmul_test();
     //AesTest test1;
     //return QTest::qExec(&test1);
 
 
-    gfmul_test();
     return 1;
 }
 

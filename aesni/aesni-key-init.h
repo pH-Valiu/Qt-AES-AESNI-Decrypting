@@ -9,6 +9,8 @@
 
 #include "aesni-key-exp.h"
 
+namespace {
+
 typedef struct KEY_SCHEDULE{
     ALIGN16 unsigned char KEY[16*15];
     unsigned int nr;
@@ -101,5 +103,6 @@ int AES_set_decrypt_key (const unsigned char *userKey,
      return 0;
 }
 
+}
 
 #endif // AESNIKEYINIT_H

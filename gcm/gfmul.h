@@ -3,6 +3,7 @@
 
 
 #include <emmintrin.h>
+#include <tmmintrin.h>
 #include <QString>
 
 /**
