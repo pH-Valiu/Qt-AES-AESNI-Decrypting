@@ -19,8 +19,7 @@ DEFINES += USE_INTEL_AES_IF_AVAILABLE
 QMAKE_CXXFLAGS += \
     -maes \             # enable AES-NI instruction set
     -mpclmul \          # enable Carry-Less multiply
-    -mavx2 \            # enable AVX2 instruction set
-    #-mssse3             # enable SSSE3 instruction set. Might be useful or necessary for AES-NI (mssse2 is default in x64/64)
+    -mavx2 \            # enable AVX2 instruction set (includes AVX, AVX2, SSE, SSE2, SSE3, SSSE3, SSE4.1, SSE4.2)
 
 # You can also make your code fail to compile if you use deprecated APIs.
 # In order to do so, uncomment the following line.

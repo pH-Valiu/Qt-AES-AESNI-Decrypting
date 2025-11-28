@@ -1,17 +1,30 @@
 #include <gcm/gcm.h>
+#include <gcm/gfmul.h>
 #include <aesni/aesni-key-init.h>
+
+#include <smmintrin.h>
 #include <qaesencryption.h>
 #include <QDebug>
 #include <QString>
 
 void singleAESBlock(const unsigned char* in, unsigned char* out, const unsigned char* key, int number_of_rounds){
-    __m128i tmp = _mm_loadu_si128((__m128i*) in);
-    tmp = _mm_xor_si128(tmp, ((__m128i*)key)[0]);
+    __m128i tmp = _mm_loadu_si128((__m128i*) in);   // take first 16 bytes from in and store in tmp pointer
+    tmp = _mm_xor_si128(tmp, ((__m128i*)key)[0]);   // apply Round 0 key
     for(int i=1; i<number_of_rounds; i++){
-        tmp = _mm_aesenc_si128(tmp, ((__m128i*)key)[i]);
+        tmp = _mm_aesenc_si128(tmp, ((__m128i*)key)[i]);    // Rounds: [1 - (n-1)]
     }
-    tmp = _mm_aesenclast_si128(tmp, ((__m128i*)key)[number_of_rounds]);
-    _mm_storeu_si128((__m128i*)out, tmp);
+    tmp = _mm_aesenclast_si128(tmp, ((__m128i*)key)[number_of_rounds]); // Round: n
+    _mm_storeu_si128((__m128i*)out, tmp);           // store tmp in first 16 bytes of out pointer
+}
+
+__m128i singleAESBlock(const __m128i& in, const __m128i* const key, int number_of_rounds){
+    __m128i out = in;
+    out _mm_xor_si128(out, key[0]);
+    for(int i=1; i<number_of_rounds; i++){
+        out = _mm_aesenc_si128(out, key[i]);
+    }
+    out = _mm_aesenclast_si128(out, key[number_of_rounds]);
+    return out;
 }
 
 struct GCM_OUT encrypt(const QByteArray &key, const QByteArray &iv, const QByteArray &aad, const QByteArray &p){
@@ -25,12 +38,21 @@ struct GCM_OUT encrypt(const QByteArray &key, const QByteArray &iv, const QByteA
         return GCM_OUT();
     }
 
-    // 1. Key Expansion
+    // 0.3: Key Expansion
     AES_KEY aesKey;
     AES_set_encrypt_key((unsigned char*) key.constData(), gcm_keyLengthBits, &aesKey);
-    QByteArray expKey = QByteArray::fromRawData((const char*) aesKey.KEY, gcm_expKeyLength);    // bc expKey is fromRawData, we must not delete aesKey, because expKey contains the data pointer of aesKey. but killing expKey will not kill the key inside
+
+    // 1: H = AES_k(0^128)
+    __m128i H = singleAESBlock(ZERO, (__m128i*) aesKey.KEY, gcm_n_rounds);
 
     // 2. IV Expansion
+    __m128i j0;
+    if(iv.length() == 12){
+        j0 = _mm_loadu_si128((__m128i*) iv.constData());
+        j0 = _mm_insert_epi32(j0, 0x10000000, 3);       // this is such that in memory a0:| iv0, iv1, iv2, iv3, iv4, ..., iv11, iv12, 00, 00, 00, 01 |:a15
+    } else {
+
+    }
 
 
 
