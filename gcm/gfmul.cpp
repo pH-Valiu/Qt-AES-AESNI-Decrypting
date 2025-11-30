@@ -165,9 +165,54 @@ QString print128_hex_lanes(__m128i var)
 
     // print high lane first
     QString s = QString::asprintf(
-        "%08X %08X %08X %08X\n",
+        "%08X %08X %08X %08X",
         val[3], val[2], val[1], val[0]);
     return s;
+}
+
+#include <smmintrin.h>
+
+#include <emmintrin.h>
+#include <smmintrin.h>
+#include <stdint.h>
+#include <QDebug>
+
+int fun() {
+    uint8_t iv[12] = { 1, 2, 3, 4,  5, 6, 7, 8,  9, 10, 11, 12 };
+
+    // --- CASE A: treat each IV chunk as LITTLE-ENDIAN 32-bit integers ---
+    __m128i a = _mm_set_epi32(
+        0x01000000,
+        *(const int*)(iv + 8),
+        *(const int*)(iv + 4),
+        *(const int*)(iv + 0)
+        );
+
+    uint8_t outA[16];
+    memcpy(outA, &a, 16);
+
+    qInfo() << "\n=== CASE A (little-endian int loads) ===";
+    qInfo() << QByteArray((char*)outA,16).toHex(' ');
+
+
+    // --- CASE B: treat IV as BIG-ENDIAN byte string (GCM correct) ---
+    // Load bytes directly in the correct order
+    uint8_t block[16] = {
+        iv[0],iv[1],iv[2],iv[3],
+        iv[4],iv[5],iv[6],iv[7],
+        iv[8],iv[9],iv[10],iv[11],
+        0x00,0x00,0x00,0x01  // 32-bit counter in big-endian
+    };
+
+    __m128i b = _mm_loadu_si128((__m128i*)block);
+
+    uint8_t outB[16];
+    memcpy(outB, &b, 16);
+
+    qInfo() << "\n=== CASE B (byte-wise big-endian load, GCM correct) ===";
+    qInfo() << QByteArray((char*)outB,16).toHex(' ');
+
+    return 0;
 }
 
 void gfmul_test(){
@@ -254,4 +299,21 @@ void gfmul_test(){
         qWarning() << "Assertion (res == res_assert): is false!";
     }
     qInfo("\n");
+
+
+    uint8_t arr[16];
+    uint8_t iv[12] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+    __m128i BSWAP_MASK = _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+    QByteArray d = QByteArray::fromRawData((char*) iv, 12);
+    __m128i test2 = _mm_loadu_si128((__m128i*)d.constData());
+    test2 = _mm_insert_epi32(test2, 0x01000000, 3);
+    test2 = _mm_shuffle_epi8(test2, BSWAP_MASK);
+    memcpy(arr, &test2, 16);
+    qInfo() << "test: a15:|" <<arr[15]<<", "<<arr[14]<<", "<<arr[13]<<", "<<arr[12]<<", "<<arr[11]<<", "<<arr[10]<<", "<<arr[9]<<", "<<arr[8]<<", "<<arr[7]<<", "<<arr[6]<<", "<<arr[5]<<", "<<arr[4]<<", "<<arr[3]<<", "<<arr[2]<<", "<<arr[1]<<", "<<arr[0]<<"|:a0";
+
+    __m128i test3 = _mm_set_epi32(0x01000000, *(const int*)(d.constData() + 8), *(const int*)(d.constData() + 4), *(const int*)(d.constData() + 0));
+    memcpy(arr, &test3, 16);
+    qInfo() << "test: a15:|" <<arr[15]<<", "<<arr[14]<<", "<<arr[13]<<", "<<arr[12]<<", "<<arr[11]<<", "<<arr[10]<<", "<<arr[9]<<", "<<arr[8]<<", "<<arr[7]<<", "<<arr[6]<<", "<<arr[5]<<", "<<arr[4]<<", "<<arr[3]<<", "<<arr[2]<<", "<<arr[1]<<", "<<arr[0]<<"|:a0";
+
+    fun();
 }

@@ -36,6 +36,7 @@ QByteArray random_iv();
 void gcm_test();
 
 void singleAESBlock(const unsigned char* in, unsigned char* out, unsigned char length, const unsigned char* key, int number_of_rounds);
+__m128i singleAESBlock(const __m128i& in, const __m128i* const key, int number_of_rounds);
 
 // ---------------------------------
 // Future Abstraction of constants (AES-128)
@@ -57,6 +58,8 @@ static constexpr quint64 MAX_IV_LEN     = 18446744073709551615ULL;  // 2^64 - 1
 // ----------------------------
 static __m128i BSWAP_MASK = _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
 static __m128i BSWAP_EPI64_MASK = _mm_set_epi8(8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7);
+static __m128i ONE = _mm_set_epi32(0, 1, 0, 0);
+static __m128i FOUR = _mm_set_epi32(0, 4, 0, 0);
 
 
 #endif // GCM_H
