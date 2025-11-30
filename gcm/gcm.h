@@ -4,6 +4,7 @@
 #include "wmmintrin.h"
 #include <QString>
 #include <QByteArray>
+#include "aesni/aesni-key-init.h"
 
 
 // ------------------------------
@@ -37,6 +38,7 @@ void gcm_test();
 
 void singleAESBlock(const unsigned char* in, unsigned char* out, unsigned char length, const unsigned char* key, int number_of_rounds);
 __m128i singleAESBlock(const __m128i& in, const __m128i* const key, int number_of_rounds);
+__m128i singleAESBlock(const __m128i& in, const AES_KEY& key);
 
 // ---------------------------------
 // Future Abstraction of constants (AES-128)

@@ -7,6 +7,19 @@
 #include <qaesencryption.h>
 #include <QDebug>
 #include <QString>
+static inline void assert_m128(__m128i a, __m128i a_assert, const QString& name)
+{
+    __m128i diff = _mm_xor_si128(a, a_assert);
+    __m128i mask = _mm_set1_epi32(0xFFFFFFFF);
+
+    if (_mm_test_all_zeros(mask, diff)) {
+        qInfo() << "Assertion (" << name << "): OK";
+    } else {
+        qWarning() << "Assertion (" << name << "): FAILED";
+        qWarning() << "Expected: "<<print128_hex_lanes(a_assert);
+        qWarning() << "Actual: "<<print128_hex_lanes(a);
+    }
+}
 
 void singleAESBlock(const unsigned char* in, unsigned char* out, const unsigned char* key, int number_of_rounds){
     __m128i tmp = _mm_loadu_si128((__m128i*) in);   // take first 16 bytes from in and store in tmp pointer
@@ -19,16 +32,23 @@ void singleAESBlock(const unsigned char* in, unsigned char* out, const unsigned 
 }
 
 __m128i singleAESBlock(const __m128i& in, const __m128i* const key, int number_of_rounds){
-    __m128i out = in;
-    out = _mm_xor_si128(out, key[0]);
+    __m128i out = _mm_xor_si128(in, key[0]);
     for(int i=1; i<number_of_rounds; i++){
         out = _mm_aesenc_si128(out, key[i]);
     }
-    out = _mm_aesenclast_si128(out, key[number_of_rounds]);
-    return out;
+    return _mm_aesenclast_si128(out, key[number_of_rounds]);
 }
 
-struct GCM_OUT encrypt(const QByteArray &key, const QByteArray &iv, const QByteArray &aad, const QByteArray &p){
+__m128i singleAESBlock(const __m128i& in, const AES_KEY& key){
+    __m128i* keys = (__m128i*) key.KEY;
+    __m128i out = _mm_xor_si128(in, keys[0]);
+    for(int i=1; i<key.nr; i++){
+        out = _mm_aesenc_si128(out, keys[i]);
+    }
+    return _mm_aesenclast_si128(out, keys[key.nr]);
+}
+
+GCM_OUT encrypt(const QByteArray &key, const QByteArray &iv, const QByteArray &aad, const QByteArray &p){
     // 0.1: Check instruction set support
     if(!(AES_GCM_Compatability::hasAES() && AES_GCM_Compatability::hasAVX2() && AES_GCM_Compatability::hasPCLMUL())) {
         throw std::runtime_error("CPU does not support required AES-GCM instructions (AES-NI, PCLMUL, AVX2");
@@ -43,37 +63,123 @@ struct GCM_OUT encrypt(const QByteArray &key, const QByteArray &iv, const QByteA
     AES_KEY aesKey;
     AES_set_encrypt_key((unsigned char*) key.constData(), gcm_keyLengthBits, &aesKey);
 
+    // 0.4 Variable declarations
+    __m128i Y0, tmp1, H, T, ctr1;
+    __m128i last_block = ZERO;
+    __m128i X = ZERO;           // X is used for the running GHASH calculation state
+    int i, j;
+
+    GCM_OUT out;
+    out.c.resize(p.length());
+    out.t.resize(16);
+    char* c_link = out.c.data();
+
     // 1: H = AES_k(0^128)
-    __m128i H = singleAESBlock(ZERO, (__m128i*) aesKey.KEY, gcm_n_rounds);
+    H = singleAESBlock(ZERO, aesKey);
+    H = _mm_shuffle_epi8(H, BSWAP_MASK);
 
     // 2. IV Expansion
-    __m128i j0;
     if(iv.length() == 12){
-        j0 = _mm_loadu_si128((__m128i*) iv.constData());
-        j0 = _mm_insert_epi32(j0, 0x01000000, 3);       // this is such that in memory a0:| iv0, iv1, iv2, iv3, iv4, ..., iv11, iv12, 00, 00, 00, 01 |:a15
-    } else {
-
+        Y0 = _mm_loadu_si128((__m128i*) iv.constData());
+        Y0 = _mm_insert_epi32(Y0, 0x01000000, 3);       // this is such that in memory a0:| iv0, iv1, iv2, iv3, iv4, ..., iv11, iv12, 00, 00, 00, 01 |:a15
+    } else {        // We have to apply GHASH(IV||0^{remainingBytesForFullBlock}||0^32||iv.bitlength())
+        Y0 = ZERO;
+        for(i=0; i < iv.length()/16; i++){  // We do first all full 16 byte blocks
+            tmp1 = _mm_loadu_si128(&((__m128i*)iv.constData())[i]);
+            tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
+            Y0 = _mm_xor_si128(Y0, tmp1);
+            Y0 = gfmul_reflected(Y0, H);
+        }
+        if(iv.length() % 16){
+            for(j=0; j < iv.length() % 16; j++)
+                ((unsigned char*)&last_block)[j] = iv[i*16+j];
+            tmp1 = last_block;
+            tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
+            Y0 = _mm_xor_si128(Y0, tmp1);
+            Y0 = gfmul_reflected(Y0, H);
+        }
+        tmp1 = _mm_insert_epi64(tmp1, iv.length()*8, 0);
+        tmp1 = _mm_insert_epi64(tmp1, 0, 1);
+        Y0 = _mm_xor_si128(Y0, tmp1);
+        Y0 = gfmul_reflected(Y0, H);
+        Y0 = _mm_shuffle_epi8(Y0, BSWAP_MASK);      // this brings it back into "normal" world
     }
 
+    // 3. T_pre computation
+    T = singleAESBlock(Y0, aesKey);     // this will be xor-ed onto the full GHASH output to form the final tag
 
 
-    return GCM_OUT();
-
-}
-
-static inline void assert_m128(__m128i a, __m128i a_assert, const QString& name)
-{
-    __m128i diff = _mm_xor_si128(a, a_assert);
-    __m128i mask = _mm_set1_epi32(0xFFFFFFFF);
-
-    if (_mm_test_all_zeros(mask, diff)) {
-        qInfo() << "Assertion (" << name << "): OK";
-    } else {
-        qWarning() << "Assertion (" << name << "): FAILED";
-        qWarning() << "Expected: "<<print128_hex_lanes(a_assert);
-        qWarning() << "Actual: "<<print128_hex_lanes(a);
+    // 4. GHASH(aad)
+    for(i=0; i<aad.length()/16; i++){       // first apply GHASH on all full blocks
+        tmp1 = _mm_loadu_si128(&((__m128i*)aad.constData())[i]);
+        tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
+        X = _mm_xor_si128(X, tmp1);
+        X = gfmul_reflected(X, H);
     }
+    if(aad.length() % 16){                  // apply GHASH on the remaining block if necessary
+        last_block = ZERO;
+        for(j=0; j<aad.length() % 16; j++){
+            ((unsigned char*) &last_block)[j] = aad[i*16 + j];
+        }
+        tmp1 = last_block;
+        tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
+        X = _mm_xor_si128(X, tmp1);
+        X = gfmul_reflected(X, H);
+    }
+
+    // 5. Ciphertext computation
+    ctr1 = Y0;
+    for(i=0; i<p.length() / 16; i++) {      // we traverse all **full** 16byte blocks of p
+        ctr1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
+        ctr1 = _mm_add_epi32(ctr1, ONE);                    // increase ctr1 <- ctr1 + 1
+        ctr1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
+
+        tmp1 = singleAESBlock(ctr1, aesKey);                // encrypt (j0 + 1) -> tmp1
+
+        tmp1 = _mm_xor_si128(tmp1, _mm_loadu_si128(&((__m128i*)p.constData())[i]));     // xor tmp1 with p block -> c block
+
+        _mm_storeu_si128(&((__m128i*)c_link)[i], tmp1);           // store c block in out
+
+        tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);          // bring c block to reverse world
+
+        X = _mm_xor_si128(X, tmp1);
+        X = gfmul_reflected(X, H);                          // update GHASH state with currently computed ciphertext C
+    }
+    if(p.length() % 16){            // handle last block if necessary
+        ctr1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
+        ctr1 = _mm_add_epi32(ctr1, ONE);
+        ctr1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
+
+        tmp1 = singleAESBlock(ctr1, aesKey);     // encrypt (j0 + 1) -> tmp1
+
+        tmp1 = _mm_xor_si128(tmp1, _mm_loadu_si128(&((__m128i*)p.constData())[i]));
+        last_block = tmp1;
+        for(j=0; j<p.length() % 16; j++){
+            c_link[i*16 + j] = ((unsigned char*) &last_block)[j];
+        }
+        for(j; j<16; j++){
+            ((unsigned char*) &last_block)[j] = 0;
+        }
+        tmp1 = last_block;
+        tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
+        X = _mm_xor_si128(X, tmp1);
+        X = gfmul_reflected(X, H);
+    }
+
+    // 6. Final Tag
+    tmp1 = _mm_insert_epi64(tmp1, p.length()*8, 0);
+    tmp1 = _mm_insert_epi64(tmp1, aad.length()*8, 1);
+
+    X = _mm_xor_si128(X, tmp1);
+    X = gfmul_reflected(X, H);
+    X = _mm_shuffle_epi8(X, BSWAP_MASK);        // bring final GHASH state back to normal world
+    T = _mm_xor_si128(X, T);
+    _mm_storeu_si128((__m128i*)out.t.data(), T);
+
+    return out;
 }
+
+
 
 
 #include <QString>
@@ -224,10 +330,24 @@ void gcm_test(){
     _mm_storeu_si128((__m128i*)tag, T);
 
     QByteArray C_assert = QByteArray::fromHex("42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e091");
-    if(C_assert == QByteArray::fromRawData((const char*) out, p.length())){
+    if(C_assert == QByteArray::fromRawData((char*) out, p.length())){
         qInfo() << "Assertion ( \"C\" ): OK";
     } else{
         qInfo() << "Assertion ( \"C\" ): WRONG";
+    }
+
+
+    GCM_OUT out_test = encrypt(key, iv, a, p);
+    if(C_assert == out_test.c){
+        qInfo() << "Assertion ( \"C\" ): OK";
+    } else{
+        qInfo() << "Assertion ( \"C\" ): WRONG";
+    }
+    if(QByteArray::fromHex("5bc94fbc3221a5db94fae95ae7121a47") == out_test.t){
+        qInfo() << "Assertion ( \"T\" ): OK";
+    } else{
+        qInfo() << "Assertion ( \"T\" ): WRONG";
+        qInfo() << "Actual: "<<out_test.t;
     }
 
 
