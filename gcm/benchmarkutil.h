@@ -6,12 +6,10 @@
 #include <algorithm>
 #include <cmath>
 #include <x86intrin.h>   // for __rdtsc
+#include <gcm/gcm.h>    // for GCM_OUT
 
 class BenchmarkUtil {
 public:
-
-    using GfMulFunc = __m128i(*)(__m128i, __m128i);
-
     struct Stats {
         quint64 min;
         quint64 max;
@@ -23,6 +21,8 @@ public:
     // =============================
     // Public entry point
     // =============================
+    using GfMulFunc = __m128i(*)(const __m128i&, const __m128i&);
+
     static void run(const QString &name,
                     GfMulFunc func,
                     __m128i fixedA,
@@ -60,6 +60,133 @@ public:
         printHistogramRaw(rawNs, "Per-call timing histogram (ns)");
     }
 
+    // =============================
+    // QByteArray-specific benchmarking
+    // =============================
+
+    using EncryptFunc = GCM_OUT(*)(const QByteArray &key,
+                                       const QByteArray &iv,
+                                       const QByteArray &aad,
+                                       const QByteArray &plaintext);
+    using DecryptFunc = QByteArray(*)(const QByteArray &key,
+                                       const QByteArray &iv,
+                                       const QByteArray &aad,
+                                       const QByteArray &ciphertext,
+                                       const QByteArray &tag);
+
+    static void runEncryptBenchmark(const QString &name,
+                                    EncryptFunc func,
+                                    const QByteArray &key,
+                                    const QByteArray &iv,
+                                    const QByteArray &aad,
+                                    const QByteArray &plaintext,
+                                    int warmupIters = 2000,
+                                    int measureIters = 10000,
+                                    int perCallSamples = 200)
+    {
+        qInfo() << "Benchmarking encrypt:" << name;
+
+        // Warm-up
+        for (int i = 0; i < warmupIters; i++)
+            func(key, iv, aad, plaintext);
+
+        // Block measurement
+        QVector<quint64> blockTimes;
+        blockTimes.reserve(20);
+        for (int s = 0; s < 20; s++) {
+            quint64 start = __rdtsc();
+            for (int i = 0; i < measureIters; i++)
+                func(key, iv, aad, plaintext);
+            quint64 end = __rdtsc();
+            blockTimes.append((end - start) / measureIters);
+        }
+        Stats blockStats = computeStats(blockTimes);
+
+        // Per-call measurement
+        QVector<quint64> rawCycles;
+        QVector<quint64> singleTimes;
+        singleTimes.reserve(perCallSamples);
+        for (int i = 0; i < perCallSamples; i++) {
+            QByteArray t1 = randomize(key);
+            QByteArray t2 = randQByteArray(256);
+            QByteArray t3 = randQByteArray(256);
+            QByteArray t4 = randQByteArray(512);
+            quint64 start = __rdtsc();
+            func(t1, t2, t3, t4);
+            quint64 end = __rdtsc();
+            singleTimes.append(end - start);
+        }
+
+        double cpuGHz = calibratedCPUGHz();
+        QVector<quint64> rawNs;
+        rawNs.reserve(singleTimes.size());
+        for (quint64 c : singleTimes) rawNs.append(quint64(c / cpuGHz));
+
+        qInfo() << "--------- Block measurement ---------";
+        printStats(blockStats);
+        qInfo() << "--------- Per-call timing ---------";
+        printStats(computeStats(singleTimes));
+        printHistogramRaw(rawNs, "Per-call histogram (ns)");
+    }
+
+    static void runDecryptBenchmark(const QString &name,
+                                    DecryptFunc func,
+                                    const QByteArray &key,
+                                    const QByteArray &iv,
+                                    const QByteArray &aad,
+                                    const QByteArray &ciphertext,
+                                    const QByteArray &tag,
+                                    int warmupIters = 2000,
+                                    int measureIters = 10000,
+                                    int perCallSamples = 200)
+    {
+        qInfo() << "Benchmarking decrypt:" << name;
+
+        // Warm-up
+        for (int i = 0; i < warmupIters; i++)
+            func(key, iv, aad, ciphertext, tag);
+
+        // Block measurement
+        QVector<quint64> blockTimes;
+        blockTimes.reserve(20);
+        for (int s = 0; s < 20; s++) {
+            quint64 start = __rdtsc();
+            for (int i = 0; i < measureIters; i++)
+                func(key, iv, aad, ciphertext, tag);
+            quint64 end = __rdtsc();
+            blockTimes.append((end - start) / measureIters);
+        }
+        Stats blockStats = computeStats(blockTimes);
+
+        // Per-call measurement
+        QVector<quint64> rawCycles;
+        QVector<quint64> singleTimes;
+        singleTimes.reserve(perCallSamples);
+        for (int i = 0; i < perCallSamples; i++) {
+            QByteArray t1 = randomize(key);
+            QByteArray t2 = randQByteArray(256);
+            QByteArray t3 = randQByteArray(256);
+            QByteArray t4 = randQByteArray(512);
+            QByteArray t5 = randomize(tag);
+            quint64 start = __rdtsc();
+            func(t1, t2, t3, t4, t5);
+            quint64 end = __rdtsc();
+            singleTimes.append(end - start);
+        }
+
+        double cpuGHz = calibratedCPUGHz();
+        QVector<quint64> rawNs;
+        rawNs.reserve(singleTimes.size());
+        for (quint64 c : singleTimes) rawNs.append(quint64(c / cpuGHz));
+
+        qInfo() << "--------- Block measurement ---------";
+        printStats(blockStats);
+        qInfo() << "--------- Per-call timing ---------";
+        printStats(computeStats(singleTimes));
+        printHistogramRaw(rawNs, "Per-call histogram (ns)");
+    }
+
+
 private:
 
     // =============================
@@ -68,6 +195,24 @@ private:
     static __m128i rand128() {
         return _mm_set_epi64x(QRandomGenerator::global()->generate64(),
                               QRandomGenerator::global()->generate64());
+    }
+    static QByteArray randQByteArray(int max_size) {
+        if (max_size <= 0) return QByteArray();
+
+        // Determine random size between 1 and max_size
+        int size = QRandomGenerator::global()->bounded(1, max_size + 1);
+
+        QByteArray out(size, Qt::Uninitialized);
+        for (int i = 0; i < size; i++) {
+            out[i] = static_cast<char>(QRandomGenerator::global()->bounded(0, 256));
+        }
+        return out;
+    }
+    static QByteArray randomize(const QByteArray &in) {
+        QByteArray out = in;
+        for (int i = 0; i < out.size(); i++)
+            out[i] = QRandomGenerator::global()->bounded(256);
+        return out;
     }
 
     // =============================
@@ -192,43 +337,58 @@ private:
     // =============================
     static void printHistogramRaw(const QVector<quint64> &data,
                                   const QString &title,
-                                  int bins = 30,
-                                  quint64 fixedMin = 5) // <--- new parameter
+                                  int bins = 30)
     {
         if (data.isEmpty()) return;
 
-        quint64 minv = fixedMin;                   // always start at 0ns
+        // 1. Determine min and max dynamically
+        quint64 minv = *std::min_element(data.begin(), data.end());
         quint64 maxv = *std::max_element(data.begin(), data.end());
-        quint64 range = maxv - minv;
-        quint64 step  = 1;//std::max<quint64>(1, range / bins);
 
+        if (minv == maxv) {
+            // All values are identical, show a single bar
+            qInfo() << title;
+            qInfo() << "[" << minv << "] " << QString(QChar(0x2588)).repeated(40) << " " << data.size();
+            return;
+        }
+
+        // 2. Compute step for bins
+        quint64 range = maxv - minv;
+        quint64 step = std::max<quint64>(1, range / bins);
+
+        // 3. Allocate bins
         QVector<int> hist(bins, 0);
+
+        // 4. Fill bins
         for (quint64 v : data) {
             int idx = std::min<int>((v - minv) / step, bins - 1);
             hist[idx]++;
         }
 
+        // 5. Find max count for bar scaling
         int maxCount = *std::max_element(hist.begin(), hist.end());
         int barWidth = 40;
 
+        // 6. Print histogram
         qInfo() << title;
         qInfo().nospace() << "Range: " << minv << " – " << maxv
-                          << " ns   (bin step = " << step << ")";
+                          << "   (bin step = " << step << ")";
 
         for (int i = 0; i < bins; i++) {
             quint64 lo = minv + i * step;
-            quint64 hi = lo + step;
+            quint64 hi = (i == bins - 1) ? maxv : lo + step; // last bin includes max
 
             int count = hist[i];
-            int bars = (int)((double)count / maxCount * barWidth);
+            int bars = int(double(count) / maxCount * barWidth);
 
             QString bar(bars, QChar(0x2588));
 
             qInfo().nospace()
-                << "[" << lo << " – " << hi << " ns] "
+                << "[" << lo << " – " << hi << "] "
                 << bar << " " << count;
         }
     }
+
 
 };
 
