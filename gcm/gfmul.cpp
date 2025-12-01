@@ -27,7 +27,7 @@ __m128i reflect_xmm(__m128i X){
     return _mm_shuffle_epi8(tmp1, BSWAP_MASK);
 };
 
-__m128i gfmul(__m128i a, __m128i b){
+__m128i gfmul(const __m128i& a, const __m128i& b){
     // Step 1: Multiply
     __m128i a0b0 = _mm_clmulepi64_si128(a, b, 0x00);
     __m128i a0b1 = _mm_clmulepi64_si128(a, b, 0x10);
@@ -68,7 +68,7 @@ __m128i gfmul(__m128i a, __m128i b){
  * @param b
  * @return
  */
-__m128i gfmul_k_optimized(__m128i a, __m128i b){
+__m128i gfmul_k_optimized(const __m128i& a, const __m128i& b){
     // Step 0: Pre-requesites
     //__m128i k = _mm_xor_si128(_mm_clmulepi64_si128(b, q, 0x01), _mm_slli_si128(b, 8)); This line achieved the same as the one below (in reversed case think about the bitshift which could result in greater >128 bit intermediate result)
     __m128i k = _mm_xor_si128(gfmul(_mm_srli_si128(b, 8), Q), _mm_slli_si128(b, 8));     // K = GFMUL(B[1], Q) + B[0]*x^64
@@ -113,7 +113,7 @@ __m128i gfmul_k_optimized(__m128i a, __m128i b){
  * @param b
  * @return
  */
-__m128i gfmul_reflected(__m128i a, __m128i b){
+__m128i gfmul_reflected(const __m128i& a, const __m128i& b){
     //__m128i Q_r = _mm_set_epi32(0, 0, 0xc2000000, 0);
 
     // Step 1: Multiply
@@ -176,44 +176,6 @@ QString print128_hex_lanes(__m128i var)
 #include <smmintrin.h>
 #include <stdint.h>
 #include <QDebug>
-
-int fun() {
-    uint8_t iv[12] = { 1, 2, 3, 4,  5, 6, 7, 8,  9, 10, 11, 12 };
-
-    // --- CASE A: treat each IV chunk as LITTLE-ENDIAN 32-bit integers ---
-    __m128i a = _mm_set_epi32(
-        0x01000000,
-        *(const int*)(iv + 8),
-        *(const int*)(iv + 4),
-        *(const int*)(iv + 0)
-        );
-
-    uint8_t outA[16];
-    memcpy(outA, &a, 16);
-
-    qInfo() << "\n=== CASE A (little-endian int loads) ===";
-    qInfo() << QByteArray((char*)outA,16).toHex(' ');
-
-
-    // --- CASE B: treat IV as BIG-ENDIAN byte string (GCM correct) ---
-    // Load bytes directly in the correct order
-    uint8_t block[16] = {
-        iv[0],iv[1],iv[2],iv[3],
-        iv[4],iv[5],iv[6],iv[7],
-        iv[8],iv[9],iv[10],iv[11],
-        0x00,0x00,0x00,0x01  // 32-bit counter in big-endian
-    };
-
-    __m128i b = _mm_loadu_si128((__m128i*)block);
-
-    uint8_t outB[16];
-    memcpy(outB, &b, 16);
-
-    qInfo() << "\n=== CASE B (byte-wise big-endian load, GCM correct) ===";
-    qInfo() << QByteArray((char*)outB,16).toHex(' ');
-
-    return 0;
-}
 
 void gfmul_test(){
     /* Test vektoren (TEST 1 - nach Intel Doc 2014 - Page 78 in Doc A.: "Intel Carry-Less Multiplication Instruction and its Usage for Computing in GCM mode"):
@@ -315,5 +277,8 @@ void gfmul_test(){
     memcpy(arr, &test3, 16);
     qInfo() << "test: a15:|" <<arr[15]<<", "<<arr[14]<<", "<<arr[13]<<", "<<arr[12]<<", "<<arr[11]<<", "<<arr[10]<<", "<<arr[9]<<", "<<arr[8]<<", "<<arr[7]<<", "<<arr[6]<<", "<<arr[5]<<", "<<arr[4]<<", "<<arr[3]<<", "<<arr[2]<<", "<<arr[1]<<", "<<arr[0]<<"|:a0";
 
-    fun();
+
+    const __m128i x = _mm_set_epi32(0x952b2a56, 0xa5604ac0, 0xb32b6656, 0xa05b40b6);
+    const __m128i y = _mm_set_epi32(0xdfa6bf4d, 0xed81db03, 0xffcaff95, 0xf830f061);
+    BenchmarkUtil::run("gfmul_reflected", gfmul_reflected, x, y);
 }

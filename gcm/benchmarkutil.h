@@ -17,6 +17,31 @@ public:
         quint64 median;
         double stddev;
     };
+    // =============================
+    // Random 128-bit generator
+    // =============================
+    static __m128i rand128() {
+        return _mm_set_epi64x(QRandomGenerator::global()->generate64(),
+                              QRandomGenerator::global()->generate64());
+    }
+    static QByteArray randomize(const QByteArray &in) {
+        QByteArray out = in;
+        for (int i = 0; i < out.size(); i++)
+            out[i] = QRandomGenerator::global()->bounded(256);
+        return out;
+    }
+    static QByteArray randQByteArray(int max_size, int min_size = 1) {
+        if (max_size <= 0) return QByteArray();
+
+        // Determine random size between 1 and max_size
+        int size = QRandomGenerator::global()->bounded(min_size, max_size + 1);
+
+        QByteArray out(size, Qt::Uninitialized);
+        for (int i = 0; i < size; i++) {
+            out[i] = static_cast<char>(QRandomGenerator::global()->bounded(0, 256));
+        }
+        return out;
+    }
 
     // =============================
     // Public entry point
@@ -108,9 +133,9 @@ public:
         singleTimes.reserve(perCallSamples);
         for (int i = 0; i < perCallSamples; i++) {
             QByteArray t1 = randomize(key);
-            QByteArray t2 = randQByteArray(256);
-            QByteArray t3 = randQByteArray(256);
-            QByteArray t4 = randQByteArray(512);
+            QByteArray t2 = randQByteArray(256, 96);
+            QByteArray t3 = randQByteArray(256, 50);
+            QByteArray t4 = randQByteArray(512, 128);
             quint64 start = __rdtsc();
             func(t1, t2, t3, t4);
             quint64 end = __rdtsc();
@@ -164,9 +189,9 @@ public:
         singleTimes.reserve(perCallSamples);
         for (int i = 0; i < perCallSamples; i++) {
             QByteArray t1 = randomize(key);
-            QByteArray t2 = randQByteArray(256);
-            QByteArray t3 = randQByteArray(256);
-            QByteArray t4 = randQByteArray(512);
+            QByteArray t2 = randQByteArray(256, 96);
+            QByteArray t3 = randQByteArray(256, 50);
+            QByteArray t4 = randQByteArray(512, 128);
             QByteArray t5 = randomize(tag);
             quint64 start = __rdtsc();
             func(t1, t2, t3, t4, t5);
@@ -188,32 +213,6 @@ public:
 
 
 private:
-
-    // =============================
-    // Random 128-bit generator
-    // =============================
-    static __m128i rand128() {
-        return _mm_set_epi64x(QRandomGenerator::global()->generate64(),
-                              QRandomGenerator::global()->generate64());
-    }
-    static QByteArray randQByteArray(int max_size) {
-        if (max_size <= 0) return QByteArray();
-
-        // Determine random size between 1 and max_size
-        int size = QRandomGenerator::global()->bounded(1, max_size + 1);
-
-        QByteArray out(size, Qt::Uninitialized);
-        for (int i = 0; i < size; i++) {
-            out[i] = static_cast<char>(QRandomGenerator::global()->bounded(0, 256));
-        }
-        return out;
-    }
-    static QByteArray randomize(const QByteArray &in) {
-        QByteArray out = in;
-        for (int i = 0; i < out.size(); i++)
-            out[i] = QRandomGenerator::global()->bounded(256);
-        return out;
-    }
 
     // =============================
     // Warm-up run

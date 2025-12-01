@@ -22,9 +22,9 @@
  * @return the reflected string
  */
 __m128i reflect_xmm(__m128i X);
-__m128i gfmul(__m128i a, __m128i b);
-__m128i gfmul_k_optimized(__m128i a, __m128i b);
-__m128i gfmul_reflected(__m128i a, __m128i b);
+__m128i gfmul(const __m128i& a, const __m128i& b);
+__m128i gfmul_k_optimized(const __m128i& a, const __m128i& b);
+__m128i gfmul_reflected(const __m128i& a, const __m128i& b);
 QString print128_hex_lanes(__m128i var);
 void gfmul_test();
 static __m128i Q = _mm_set_epi32(0, 0, 0, 0x00000087);
