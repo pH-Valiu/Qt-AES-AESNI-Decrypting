@@ -290,7 +290,19 @@ __m128i gfmul_times_four_reflected(const __m128i &X1, const __m128i &X2, const _
     return c23;
 }
 
-
+/**
+ * @brief print128_hex_lanes
+ * This method prints them out in a way such that when you copy past it, to reuse the value, you may only reuse those values in a _mm_set_epi32 instantiation or comparable.
+ * Whereas if you want to load the bytes into a QByteArray, you have to apply BSWAP_MASK first
+ * e.g.
+ * print128_hex_lanes(var) -> "857119A1 F93A08AF D25E753D F3061F4B"
+ *
+ * Then to make a QByteArray out of it, you need to state: QByteArray::fromHex("4b1f06f33d755ed2af083af9a1197185");
+ * You see how every byte is switched (LE<>BE)
+ *
+ * @param var
+ * @return
+ */
 QString print128_hex_lanes(__m128i var)
 {
     uint32_t val[4];
@@ -309,6 +321,48 @@ QString print128_hex_lanes(__m128i var)
 #include <smmintrin.h>
 #include <stdint.h>
 #include <QDebug>
+
+void gfmul_times_four_test(){
+    // We are testing gfmul_times_four_reflected to 4 times gfmul_reflected
+    __m128i H = _mm_loadu_si128((__m128i*) QByteArray::fromHex("b83b533708bf535d0aa6e52980d53b78").constData());
+    __m128i H2 = gfmul_reflected(H, H);
+    __m128i H3 = gfmul_reflected(H2, H);
+    __m128i H4 = gfmul_reflected(H3, H);
+    __m128i X = ZERO;
+    __m128i X1 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("2263f048f9ee49f51b22ff863a9e3b1f").constData());
+    __m128i X2 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("81a41759f340d74d82d270f084b8f522").constData());
+    __m128i X3 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("8967e442a24719c0a336ad05a025de40").constData());
+    __m128i X4 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("8998b973d729daf0beffbf01a88e5d5e").constData());
+
+
+    // normal approach
+    __m128i X_final = _mm_xor_si128(X, X1);
+    X_final = gfmul_reflected(X_final, H);
+    X_final = _mm_xor_si128(X_final, X2);
+    X_final = gfmul_reflected(X_final, H);
+    X_final = _mm_xor_si128(X_final, X3);
+    X_final = gfmul_reflected(X_final, H);
+    X_final = _mm_xor_si128(X_final, X4);
+    X_final = gfmul_reflected(X_final, H);
+    char t[16];
+    _mm_storeu_si128((__m128i*)t, X_final);
+    QByteArray X_final_normal_bytes(t, 16);
+
+    // fast approach
+    __m128i X_final_fast = gfmul_times_four_reflected(X4, X3, X2, X1, H, H2, H3, H4);
+    _mm_storeu_si128((__m128i*)t, X_final_fast);
+    QByteArray X_final_fast_bytes(t, 16);
+
+    QByteArray assert_bytes = QByteArray::fromHex("4b1f06f33d755ed2af083af9a1197185");
+    if(X_final_normal_bytes == assert_bytes && X_final_fast_bytes == assert_bytes){
+        qInfo() << "[TEST - GFMUL TIMES FOUR] Assertion:"<< "OK";
+    } else{
+        qInfo() << "[TEST - GFMUL TIMES FOUR] Assertion: "<< "WRONG";
+        qInfo() << "[TEST - GFMUL TIMES FOUR] Expected: "<<assert_bytes.toHex();
+        qInfo() << "[TEST - GFMUL TIMES FOUR] Actual (normal): "<<X_final_normal_bytes.toHex();
+        qInfo() << "[TEST - GFMUL TIMES FOUR] Actual (fast): "<<X_final_fast_bytes.toHex();
+    }
+}
 
 void gfmul_test(){
     /* Test vektoren (TEST 1 - nach Intel Doc 2014 - Page 78 in Doc A.: "Intel Carry-Less Multiplication Instruction and its Usage for Computing in GCM mode"):
@@ -413,5 +467,6 @@ void gfmul_test(){
 
     const __m128i x = _mm_set_epi32(0x952b2a56, 0xa5604ac0, 0xb32b6656, 0xa05b40b6);
     const __m128i y = _mm_set_epi32(0xdfa6bf4d, 0xed81db03, 0xffcaff95, 0xf830f061);
+    gfmul_times_four_test();
     BenchmarkUtil::run("gfmul_reflected", gfmul_reflected, x, y);
 }
