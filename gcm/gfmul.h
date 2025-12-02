@@ -25,6 +25,7 @@ __m128i reflect_xmm(__m128i X);
 __m128i gfmul(const __m128i& a, const __m128i& b);
 __m128i gfmul_k_optimized(const __m128i& a, const __m128i& b);
 __m128i gfmul_reflected(const __m128i& a, const __m128i& b);
+__m128i gfmul_times_four_reflected(const __m128i& X1, const __m128i& X2, const __m128i& X3, const __m128i& X4, const __m128i& H1, const __m128i& H2, const __m128i& H3, const __m128i& H4);
 QString print128_hex_lanes(__m128i var);
 void gfmul_test();
 static __m128i Q = _mm_set_epi32(0, 0, 0, 0x00000087);

@@ -157,6 +157,139 @@ __m128i gfmul_reflected(const __m128i& a, const __m128i& b){
     return c23;
 }
 
+/**
+ * It follows the Karatsuba multiplication approach,
+ * where we start with [A1:A0] * [B1:B0], and then compute
+ * [C1:C0] = A1 * B1
+ * [D1:D0] = A0 * B0
+ * [E1:E0] = (A1 + A0) * (B1 + B0)
+ * Res[3:0] = [C1 : C0 + C1 + E1 + D1 : C0 + E0 + D0 + D1 : D0]
+ *                        |    |   |     |    |    |
+ * helper sum [F1:F0] = [C1 + D1 + E1 : C0 + D0 + E0]
+ *
+ * After having computed the full 255 bit result, we apply the same routine as in gfmul_reflected
+ * Say, out 255bit result is [G3:G2:G1:G0] (in code this is [C3:C2:C1:C0] just out of a naming thing, is not the same as [C1:C0])
+ * then:
+ * 1. [G3:G2:G1:G0] << 1
+ * 2. Reduce with [0:0:c2000000:0]...
+ * @brief gfmul_times_four_reflected
+ * @param X1
+ * @param X2
+ * @param X3
+ * @param X4
+ * @param H1
+ * @param H2
+ * @param H3
+ * @param H4
+ * @return
+ */
+__m128i gfmul_times_four_reflected(const __m128i &X1, const __m128i &X2, const __m128i &X3, const __m128i &X4, const __m128i &H1, const __m128i &H2, const __m128i &H3, const __m128i &H4){
+    /*algorithm by Krzysztof Jankowski, Pierre Laurent - Intel*/
+    __m128i H1_X1_lo, H1_X1_hi,
+        H2_X2_lo, H2_X2_hi,
+        H3_X3_lo, H3_X3_hi,
+        H4_X4_lo, H4_X4_hi,
+        lo, hi;
+    __m128i tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7, c01, c23;
+
+    H1_X1_lo = _mm_clmulepi64_si128(H1, X1, 0x00);
+    H2_X2_lo = _mm_clmulepi64_si128(H2, X2, 0x00);
+    H3_X3_lo = _mm_clmulepi64_si128(H3, X3, 0x00);
+    H4_X4_lo = _mm_clmulepi64_si128(H4, X4, 0x00);
+    lo = _mm_xor_si128(H1_X1_lo, H2_X2_lo);
+    lo = _mm_xor_si128(lo, H3_X3_lo);
+    lo = _mm_xor_si128(lo, H4_X4_lo);
+    // --> lo now contains H1X1_lo + H2X2_lo + H3X3_lo + H4X4_lo
+
+    H1_X1_hi = _mm_clmulepi64_si128(H1, X1, 0x11);
+    H2_X2_hi = _mm_clmulepi64_si128(H2, X2, 0x11);
+    H3_X3_hi = _mm_clmulepi64_si128(H3, X3, 0x11);
+    H4_X4_hi = _mm_clmulepi64_si128(H4, X4, 0x11);
+    hi = _mm_xor_si128(H1_X1_hi, H2_X2_hi);
+    hi = _mm_xor_si128(hi, H3_X3_hi);
+    hi = _mm_xor_si128(hi, H4_X4_hi);
+    // --> hi now contains H1X1_hi + H2X2_hi + H3X3_hi + H4X4_hi
+
+    // compute Hi+Lo (stored in 64bit) for H1 and X1    (middle term for karatsuba)
+    tmp0 = _mm_shuffle_epi32(H1, 78);   // does 64bit halves swap Hi|Lo -> Lo|Hi
+    tmp4 = _mm_shuffle_epi32(X1, 78);
+    tmp0 = _mm_xor_si128(tmp0, H1);     // now, each 64 bit half, contains Hi+Lo | Lo+Hi
+    tmp4 = _mm_xor_si128(tmp4, X1);
+
+    // compute Hi+Lo (stored in 64bit) for H2 and X2    (middle term for karatsuba)
+    tmp1 = _mm_shuffle_epi32(H2, 78);
+    tmp5 = _mm_shuffle_epi32(X2, 78);
+    tmp1 = _mm_xor_si128(tmp1, H2);
+    tmp5 = _mm_xor_si128(tmp5, X2);
+
+    // compute Hi+Lo (stored in 64bit) for H3 and X3    (middle term for karatsuba)
+    tmp2 = _mm_shuffle_epi32(H3, 78);
+    tmp6 = _mm_shuffle_epi32(X3, 78);
+    tmp2 = _mm_xor_si128(tmp2, H3);
+    tmp6 = _mm_xor_si128(tmp6, X3);
+
+    // compute Hi+Lo (stored in 64bit) for H4 and X4    (middle term for karatsuba)
+    tmp3 = _mm_shuffle_epi32(H4, 78);
+    tmp7 = _mm_shuffle_epi32(X4, 78);
+    tmp3 = _mm_xor_si128(tmp3, H4);
+    tmp7 = _mm_xor_si128(tmp7, X4);
+
+    // this computes the full middle term for each H0<>X0 pair (using just the low64bit block on each is fine, we could also use 0x10, 0x01, 0x11)
+    tmp0 = _mm_clmulepi64_si128(tmp0, tmp4, 0x00);
+    tmp1 = _mm_clmulepi64_si128(tmp1, tmp5, 0x00);
+    tmp2 = _mm_clmulepi64_si128(tmp2, tmp6, 0x00);
+    tmp3 = _mm_clmulepi64_si128(tmp3, tmp7, 0x00);
+
+    // this computes [F1:F0] = [C1:C0] + [D1:D0] + [E1:E0] (combined over all)
+    tmp0 = _mm_xor_si128(tmp0, lo);
+    tmp0 = _mm_xor_si128(tmp0, hi);
+    tmp0 = _mm_xor_si128(tmp1, tmp0);
+    tmp0 = _mm_xor_si128(tmp2, tmp0);
+    tmp0 = _mm_xor_si128(tmp3, tmp0);
+
+    tmp4 = _mm_slli_si128(tmp0, 8);     // [F0:00]
+    tmp0 = _mm_srli_si128(tmp0, 8);     // [00:F1]
+    lo = _mm_xor_si128(tmp4, lo);       // [D1:D0] + [F0:00] = [D1+C0+D0+E0 : D0]
+    hi = _mm_xor_si128(tmp0, hi);       // [C1:C0] + [00:F1] = [C1 : C0+C1+D1+E1]
+
+    // now, hi = [C1:C0+C1+D1+E1] || lo = [C0+D0+E0+D1:D0] contains full produt
+    c01 = lo;
+    c23 = hi;
+
+    // now, we have to reduce again (just copied the reduce operation from gfmul_reflected)
+    // therefore, the usage of c01 and c23 does not refer to [C1:C0] but rather refers to
+    // the variables [hi:lo] = [C3:C2:C1:C0]
+
+    // Step 1.1: Bitshift << 1
+    __m128i C01_32bitMSB, C23_32bitMSB, C01_128bitMSB;
+    C01_32bitMSB = _mm_srli_epi32(c01, 31);                 // isolate MSB of each 32bit word in C[1:0] and put at index 0 (-31) in each 32bit word
+    C23_32bitMSB = _mm_srli_epi32(c23, 31);                 // isolate MSB of each 32bit word in C[3:2] and put at index 0 (-31) in each 32bit word
+    c01 = _mm_slli_epi32(c01, 1);                           // shift each 32bit word in C[1:0] by 1 bit to the left, making space at index 0 in each 32bit word
+    c23 = _mm_slli_epi32(c23, 1);                           // shift each 32bit word in C[3:2] by 1 bit to the left, making space at index 0 in each 32bit word
+    C01_128bitMSB = _mm_srli_si128(C01_32bitMSB, 12);       // bring the all-highest MSB of C[1:0] at index 0 (-127) (this is the carry-over of C[1:0])
+    C01_32bitMSB = _mm_slli_si128(C01_32bitMSB, 4);         // rotate the prior isolated MSBs of each 32bit word in C[1:0] by one 32bit block to the left. (the lowest 32bit word is now fully cleared)
+    C23_32bitMSB = _mm_slli_si128(C23_32bitMSB, 4);         // rotate the prior isolated MSBs of each 32bit word in C[3:2] by one 32bit block to the left. (the lowest 32bit word is now fully cleared)
+    c01 = _mm_or_si128(c01, C01_32bitMSB);                  // add the prior rotated carry-over of each 32bit word onto the next 32bit word (this applies the 32bit-word carry-overs inside C[1:0])
+    c23 = _mm_or_si128(c23, C23_32bitMSB);                  // add the prior rotated carry-over of each 32bit word onto the next 32bit word (this applies the 32bit-word carry-overs inside C[1:0])
+    c23 = _mm_or_si128(c23, C01_128bitMSB);                 // add the singled out all-highest MSB of C[1:0] into C[3:2] thereby applying the 128bit carry-over from C[1:0] into C[3:2]
+
+
+
+    // Step 2.1: Reduce
+    __m128i x = _mm_clmulepi64_si128(c01, Q_r, 0x00);       // computes C[0] * Q = lower(C[1:0]) * lower(Q)
+    c23 = _mm_xor_si128(c23, _mm_srli_si128(x, 8));       // add higher half of x (X[1]) to lower part of C[3:2]
+    c23 = _mm_xor_si128(c23, _mm_unpacklo_epi64(c01, ZERO));    // add only C[0] to lower part of C[3:2]  (zeroing out C[1])
+
+    c01 = _mm_xor_si128(c01, _mm_slli_si128(x, 8));       // add lower half of x (X[0]) to upper part of C[1:0]
+
+    // Step 2.2: Reduce
+    x = _mm_clmulepi64_si128(c01, Q_r, 0x01);               // computes C[1] * Q = higher(C[1:0]) * lower(Q)
+    c23 = _mm_xor_si128(c23, x);                          // add full X on C[3:2]
+    c23 = _mm_xor_si128(c23, _mm_unpackhi_epi64(ZERO, c01)); // add C[1] on higher C[3:2] (zeroing out C[0])
+
+    return c23;
+}
+
 
 QString print128_hex_lanes(__m128i var)
 {
