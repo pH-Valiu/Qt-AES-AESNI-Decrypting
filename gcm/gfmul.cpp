@@ -172,69 +172,98 @@ __m128i gfmul_reflected(const __m128i& a, const __m128i& b){
  * then:
  * 1. [G3:G2:G1:G0] << 1
  * 2. Reduce with [0:0:c2000000:0]...
+ *
+ * Say GHASH is defined over variables Zi as inputs, and Xi as outputs with H as the GHASH key
+ * Then the formula for X4 is: (X0 is always 0)
+ * X4 =  (X3 + Z4) * H
+ *    = ((X2 + Z3) * H) + Z4) * H
+ *    = (((((((X0 + Z1) * H) + Z2) * H) + Z3) * H) + Z4) * H
+ *    = ((X0 + Z1) * H^4) + (Z2 * H^3) + (Z3 * H^2) + (Z4 * H^1)
+ *
+ * Now due to the internal nomenclation of the algorithm internally:
+ * Y1 is multiplied with H^1
+ * Y2 is multiplied with H^2
+ * Y3 is multiplied with H^3
+ * Y4 is multiplied with H^4
+ *
+ * Therefore, when invoking this method, the formula:
+ * - Z4 corresponds to parameter Y1
+ * - Z3 corresponds to parameter Y2
+ * - Z2 corresponds to parameter Y3
+ * - Z1 corresponds to parameter Y4
+ *
+ * Hence a typical invocation might look like:
+ * ```
+ * Z1 = _mm_xor_si128(X, Z1);
+ * __m128i X = gfmul_times_four_reflected(Z4, Z3, Z2, Z1, H, H2, H3, H4);
+ * ```
+ *
  * @brief gfmul_times_four_reflected
- * @param X1
- * @param X2
- * @param X3
- * @param X4
- * @param H1
- * @param H2
- * @param H3
- * @param H4
+ * @param Y1 gets multiplied with H1 (Y1 := Z4)
+ * @param Y2 gets multiplied with H2 (Y2 := Z3)
+ * @param Y3 gets multiplied with H3 (Y3 := Z2)
+ * @param Y4 gets multiplied with H4 (Y4 := Z1)
+ * @param H1 H^1
+ * @param H2 H^2
+ * @param H3 H^3
+ * @param H4 H^4
  * @return
  */
-__m128i gfmul_times_four_reflected(const __m128i &X1, const __m128i &X2, const __m128i &X3, const __m128i &X4, const __m128i &H1, const __m128i &H2, const __m128i &H3, const __m128i &H4){
+__m128i gfmul_times_four_reflected(
+    const __m128i &Y1, const __m128i &Y2, const __m128i &Y3, const __m128i &Y4,
+    const __m128i &H1, const __m128i &H2, const __m128i &H3, const __m128i &H4)
+{
     /*algorithm by Krzysztof Jankowski, Pierre Laurent - Intel*/
-    __m128i H1_X1_lo, H1_X1_hi,
-        H2_X2_lo, H2_X2_hi,
-        H3_X3_lo, H3_X3_hi,
-        H4_X4_lo, H4_X4_hi,
+    __m128i H1_Y1_lo, H1_Y1_hi,
+        H2_Y2_lo, H2_Y2_hi,
+        H3_Y3_lo, H3_Y3_hi,
+        H4_Y4_lo, H4_Y4_hi,
         lo, hi;
     __m128i tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7, c01, c23;
 
-    H1_X1_lo = _mm_clmulepi64_si128(H1, X1, 0x00);
-    H2_X2_lo = _mm_clmulepi64_si128(H2, X2, 0x00);
-    H3_X3_lo = _mm_clmulepi64_si128(H3, X3, 0x00);
-    H4_X4_lo = _mm_clmulepi64_si128(H4, X4, 0x00);
-    lo = _mm_xor_si128(H1_X1_lo, H2_X2_lo);
-    lo = _mm_xor_si128(lo, H3_X3_lo);
-    lo = _mm_xor_si128(lo, H4_X4_lo);
-    // --> lo now contains H1X1_lo + H2X2_lo + H3X3_lo + H4X4_lo
+    H1_Y1_lo = _mm_clmulepi64_si128(H1, Y1, 0x00);
+    H2_Y2_lo = _mm_clmulepi64_si128(H2, Y2, 0x00);
+    H3_Y3_lo = _mm_clmulepi64_si128(H3, Y3, 0x00);
+    H4_Y4_lo = _mm_clmulepi64_si128(H4, Y4, 0x00);
+    lo = _mm_xor_si128(H1_Y1_lo, H2_Y2_lo);
+    lo = _mm_xor_si128(lo, H3_Y3_lo);
+    lo = _mm_xor_si128(lo, H4_Y4_lo);
+    // --> lo now contains H1Y1_lo + H2Y2_lo + H3Y3_lo + H4Y4_lo
 
-    H1_X1_hi = _mm_clmulepi64_si128(H1, X1, 0x11);
-    H2_X2_hi = _mm_clmulepi64_si128(H2, X2, 0x11);
-    H3_X3_hi = _mm_clmulepi64_si128(H3, X3, 0x11);
-    H4_X4_hi = _mm_clmulepi64_si128(H4, X4, 0x11);
-    hi = _mm_xor_si128(H1_X1_hi, H2_X2_hi);
-    hi = _mm_xor_si128(hi, H3_X3_hi);
-    hi = _mm_xor_si128(hi, H4_X4_hi);
-    // --> hi now contains H1X1_hi + H2X2_hi + H3X3_hi + H4X4_hi
+    H1_Y1_hi = _mm_clmulepi64_si128(H1, Y1, 0x11);
+    H2_Y2_hi = _mm_clmulepi64_si128(H2, Y2, 0x11);
+    H3_Y3_hi = _mm_clmulepi64_si128(H3, Y3, 0x11);
+    H4_Y4_hi = _mm_clmulepi64_si128(H4, Y4, 0x11);
+    hi = _mm_xor_si128(H1_Y1_hi, H2_Y2_hi);
+    hi = _mm_xor_si128(hi, H3_Y3_hi);
+    hi = _mm_xor_si128(hi, H4_Y4_hi);
+    // --> hi now contains H1Y1_hi + H2Y2_hi + H3Y3_hi + H4Y4_hi
 
-    // compute Hi+Lo (stored in 64bit) for H1 and X1    (middle term for karatsuba)
+    // compute Hi+Lo (stored in 64bit) for H1 and Y1    (middle term for karatsuba)
     tmp0 = _mm_shuffle_epi32(H1, 78);   // does 64bit halves swap Hi|Lo -> Lo|Hi
-    tmp4 = _mm_shuffle_epi32(X1, 78);
+    tmp4 = _mm_shuffle_epi32(Y1, 78);
     tmp0 = _mm_xor_si128(tmp0, H1);     // now, each 64 bit half, contains Hi+Lo | Lo+Hi
-    tmp4 = _mm_xor_si128(tmp4, X1);
+    tmp4 = _mm_xor_si128(tmp4, Y1);
 
-    // compute Hi+Lo (stored in 64bit) for H2 and X2    (middle term for karatsuba)
+    // compute Hi+Lo (stored in 64bit) for H2 and Y2    (middle term for karatsuba)
     tmp1 = _mm_shuffle_epi32(H2, 78);
-    tmp5 = _mm_shuffle_epi32(X2, 78);
+    tmp5 = _mm_shuffle_epi32(Y2, 78);
     tmp1 = _mm_xor_si128(tmp1, H2);
-    tmp5 = _mm_xor_si128(tmp5, X2);
+    tmp5 = _mm_xor_si128(tmp5, Y2);
 
-    // compute Hi+Lo (stored in 64bit) for H3 and X3    (middle term for karatsuba)
+    // compute Hi+Lo (stored in 64bit) for H3 and Y3    (middle term for karatsuba)
     tmp2 = _mm_shuffle_epi32(H3, 78);
-    tmp6 = _mm_shuffle_epi32(X3, 78);
+    tmp6 = _mm_shuffle_epi32(Y3, 78);
     tmp2 = _mm_xor_si128(tmp2, H3);
-    tmp6 = _mm_xor_si128(tmp6, X3);
+    tmp6 = _mm_xor_si128(tmp6, Y3);
 
-    // compute Hi+Lo (stored in 64bit) for H4 and X4    (middle term for karatsuba)
+    // compute Hi+Lo (stored in 64bit) for H4 and Y4    (middle term for karatsuba)
     tmp3 = _mm_shuffle_epi32(H4, 78);
-    tmp7 = _mm_shuffle_epi32(X4, 78);
+    tmp7 = _mm_shuffle_epi32(Y4, 78);
     tmp3 = _mm_xor_si128(tmp3, H4);
-    tmp7 = _mm_xor_si128(tmp7, X4);
+    tmp7 = _mm_xor_si128(tmp7, Y4);
 
-    // this computes the full middle term for each H0<>X0 pair (using just the low64bit block on each is fine, we could also use 0x10, 0x01, 0x11)
+    // this computes the full middle term for each H0<>Y0 pair (using just the low64bit block on each is fine, we could also use 0x10, 0x01, 0x11)
     tmp0 = _mm_clmulepi64_si128(tmp0, tmp4, 0x00);
     tmp1 = _mm_clmulepi64_si128(tmp1, tmp5, 0x00);
     tmp2 = _mm_clmulepi64_si128(tmp2, tmp6, 0x00);
