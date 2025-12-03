@@ -538,6 +538,7 @@ GCM_OUT encrypt_times_four_ghash_times_four(const QByteArray &key, const QByteAr
         X = _mm_xor_si128(X, tmp1);
         X = gfmul_reflected(X, H);
     }
+    //qInfo()<<"[Encrypt_times_four_ghash_Times_four] X after aad:"<<print128_hex_lanes(X);
 
     // 4. Ciphertext computation
     ctr1 = _mm_shuffle_epi8(Y0, BSWAP_EPI64_MASK);
@@ -837,6 +838,7 @@ GCM_OUT encrypt_times_four_ghash_times_four_parallelized(const QByteArray &key, 
         X = _mm_xor_si128(X, tmp1);
         X = gfmul_reflected(X, H);
     }
+    // Tag until here is correct
 
     // 4. Ciphertext computation
     // ------------
@@ -930,7 +932,7 @@ GCM_OUT encrypt_times_four_ghash_times_four_parallelized(const QByteArray &key, 
 
     int num_threads = 4;        // std::thread::hardware_capability
     __m128i H_keys[4] = {H, H2, H3, H4};   // must be adapted to num_threads
-    __m128i X_out[num_threads];
+    __m128i X_out[num_threads] = {ZERO, ZERO, ZERO, ZERO};
     //std::thread threads[num_threads];
     qInfo()<<"P byte length"<<p.length();
     for(int m=0; m<num_threads; m++){
@@ -938,7 +940,8 @@ GCM_OUT encrypt_times_four_ghash_times_four_parallelized(const QByteArray &key, 
         //threads[m] = std::thread(encrypt_and_ghash_worker, m, &aesKey, H_keys, Y0, p.constData(), p.length(), X, c_link, (__m128i*) X_out);
     }
 
-    for(int m=0; m<num_threads; m++){
+    X = X_out[0];
+    for(int m=1; m<num_threads; m++){
         //threads[m].join();
         X = _mm_xor_si128(X, X_out[m]);
     }
