@@ -15,11 +15,18 @@ TEMPLATE = app
 # deprecated API in order to know how to port your code away from it.
 DEFINES += QT_DEPRECATED_WARNINGS
 
-DEFINES += USE_INTEL_AES_IF_AVAILABLE
+DEFINES += \
+    USE_INTEL_AES_IF_AVAILABLE \
+    AVX512_SUPPORT
+
 QMAKE_CXXFLAGS += \
     -maes \             # enable AES-NI instruction set
     -mpclmul \          # enable Carry-Less multiply
     -mavx2 \            # enable AVX2 instruction set (includes AVX, AVX2, SSE, SSE2, SSE3, SSSE3, SSE4.1, SSE4.2)
+    -mavx512f \
+    -mvpclmulqdq \
+    -mavx512bw \
+    -march=native
 
 # You can also make your code fail to compile if you use deprecated APIs.
 # In order to do so, uncomment the following line.

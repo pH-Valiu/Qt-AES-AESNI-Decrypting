@@ -32,4 +32,14 @@ static __m128i Q = _mm_set_epi32(0, 0, 0, 0x00000087);
 static __m128i Q_r = _mm_set_epi32(0, 0, 0xc2000000, 0);
 static __m128i ZERO = _mm_setzero_si128();
 
+#ifdef AVX512_SUPPORT
+#include <immintrin.h>
+__m512i gfmul_reflected_avx512_parallel(const __m512i a, const __m512i b);
+QString print512_hex_lanes(const __m512i& var);
+void gfmul_reflected_avx512_parallel_test();
+
+static __m512i ZERO_512 = _mm512_setzero_si512();
+static __m512i Q_r_512 = _mm512_set_epi32(0, 0, 0xc2000000, 0, 0, 0, 0xc2000000, 0, 0, 0, 0xc2000000, 0, 0, 0, 0xc2000000, 0);
+#endif
+
 #endif // GFMUL_H

@@ -319,6 +319,146 @@ __m128i gfmul_times_four_reflected(
     return c23;
 }
 
+
+#ifdef AVX512_SUPPORT
+/**
+ * @brief gfmul_reflected_avx512_parallel
+ * This approach mostly strictly follows the "Simple Bit-Reflected GHASH Algorithm" of Table 9 in Doc B.
+ * But with the addition of operating on four quadwords (__m128i) at the same time.
+ * One call of this method is equivalent to four gfmul_reflected ones where each time a different pair is passed.
+ *
+ * Important note: while the table says that inputs a and b are reflected, they are indeed not.
+ * Additionally, after the CLMUL(A,B), the result must be shifted by one to the left (CLMUL(A,B) << 1) to accomadate for the fact that we are intrinsically working on reflected values.
+ * Meanwhile, the reduction polynom is correctly Q' = reflect_64(Q>>1) = epi32(0...0, 0...0, 0xc2000000, 0...0)
+ * The returnted value must not be reflected but instead immediately represents the correct output as if we had done:
+ * OUT = (GFMUL(A', B'))' = (OUT')' = OUT
+ *
+ * Bear in mind that (CLMUL(A<<1,B))' != (CLMUL(A,B)<<1)'
+ *
+ * Steps are:
+ *
+ * 1. Compute CLMUL(A, B) << 1
+ * 2. Reduce with Q' (treated as 64bit) following the Doc. B approach
+ * @param a __m512i internally is [A3:A2:A1:A0]
+ * @param b __m512i internally is [B3:B2:B1:B0]
+ * @return
+ */
+__m512i gfmul_reflected_avx512_parallel(
+    const __m512i a, const __m512i b)
+{
+    /* algorithm by pH-Valiu based on Intel Doc. B Table 9 */
+    // The goal is to perform gfmul_reflected on all 4 quad words (__m128i) at the same time
+    // Therefore, each step must be seen as happening independept on each quad word
+
+    // Step 1.0: Multiplication
+    __m512i a0b0 = _mm512_clmulepi64_epi128(a, b, 0x00);
+    __m512i a1b0 = _mm512_clmulepi64_epi128(a, b, 0x01);
+    __m512i a0b1 = _mm512_clmulepi64_epi128(a, b, 0x10);
+    __m512i a1b1 = _mm512_clmulepi64_epi128(a, b, 0x11);
+
+    // compute mid
+    __m512i mid = _mm512_xor_si512(a1b0, a0b1);
+
+    // compute high and low (for each quad word respectively)
+    __m512i lo = _mm512_xor_si512(a0b0, _mm512_bslli_epi128(mid, 8));
+    __m512i hi = _mm512_xor_si512(a1b1, _mm512_bsrli_epi128(mid, 8));
+
+    // Step 1.1: Bitshift << 1
+    __m512i lo_32bitMSB, hi_32bitMSB, lo_128bitMSB;
+    lo_32bitMSB = _mm512_srli_epi32(lo, 31);
+    hi_32bitMSB = _mm512_srli_epi32(hi, 31);
+    lo = _mm512_slli_epi32(lo, 1);
+    hi = _mm512_slli_epi32(hi, 1);
+    lo_128bitMSB = _mm512_bsrli_epi128(lo_32bitMSB, 12);
+    lo_32bitMSB = _mm512_bslli_epi128(lo_32bitMSB, 4);
+    hi_32bitMSB = _mm512_bslli_epi128(hi_32bitMSB, 4);
+    lo = _mm512_or_si512(lo, lo_32bitMSB);
+    hi = _mm512_or_si512(hi, hi_32bitMSB);
+    hi = _mm512_or_si512(hi, lo_128bitMSB);
+
+    // Step 2.1: Reduce
+    __m512i x = _mm512_clmulepi64_epi128(lo, Q_r_512, 0x00);
+    hi = _mm512_xor_si512(hi, _mm512_bsrli_epi128(x, 8));
+    hi = _mm512_xor_si512(hi, _mm512_unpacklo_epi64(lo, ZERO_512));
+
+    lo = _mm512_xor_si512(lo, _mm512_bslli_epi128(x, 8));
+
+    // Step 2.2: Reduce
+    x = _mm512_clmulepi64_epi128(lo, Q_r_512, 0x01);
+    hi = _mm512_xor_si512(hi, x);
+    hi = _mm512_xor_si512(hi, _mm512_unpackhi_epi64(ZERO_512, lo));
+
+
+    return hi;
+}
+
+/**
+ * @brief print512_hex_lanes
+ * This method prints them out in a way such that when you copy past it, to reuse the value, you may only reuse those values in a _mm512_set_epi32 instantiation or comparable.
+ * Whereas if you want to load the bytes into a QByteArray, you have to apply BSWAP_MASK first
+ * e.g.
+ * print512_hex_lanes(var) -> "857119A1 F93A08AF D25E753D F3061F4B ... "
+ *
+ * Then to make a QByteArray out of it, you need to state: QByteArray::fromHex("... 4b1f06f33d755ed2af083af9a1197185");
+ * You see how every byte is switched (LE<>BE)
+ *
+ * @param var
+ * @return
+ */
+QString print512_hex_lanes(const __m512i& var)
+{
+    uint32_t val[16];
+    memcpy(val, &var, sizeof(val));
+
+    // print high lane first
+    QString s = QString::asprintf(
+        "%08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X",
+        val[15], val[14], val[13], val[12], val[11], val[10], val[9], val[8], val[7], val[6], val[5], val[4], val[3], val[2], val[1], val[0]);
+    return s;
+}
+
+
+void gfmul_reflected_avx512_parallel_test(){
+    __m128i A3 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("9ca1a8db76a56facaea9510ce2e91845").constData());
+    __m128i A2 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("1d98752cf482a50136339f5e32f58d11").constData());
+    __m128i A1 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("9171b78cafdaed1399e4570c16b0e3a2").constData());
+    __m128i A0 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("50e27ae11262ca8c81f992482a947930").constData());
+    __m128i B3 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("2fd845fa7a215674f6de500b99dce012").constData());
+    __m128i B2 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("1a64fa8afa41d604a273670c413a7a39").constData());
+    __m128i B1 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("fc2962221dc1f7f0f5227b54c850ef96").constData());
+    __m128i B0 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("8c8a3eb3d5c7400abfbcee28678335c0").constData());
+
+    __m512i A = _mm512_loadu_si512((__m512i*) QByteArray::fromHex("50e27ae11262ca8c81f992482a9479309171b78cafdaed1399e4570c16b0e3a21d98752cf482a50136339f5e32f58d119ca1a8db76a56facaea9510ce2e91845").constData());
+    __m512i B = _mm512_loadu_si512((__m512i*) QByteArray::fromHex("8c8a3eb3d5c7400abfbcee28678335c0fc2962221dc1f7f0f5227b54c850ef961a64fa8afa41d604a273670c413a7a392fd845fa7a215674f6de500b99dce012").constData());
+
+    __m128i A3B3 = gfmul_reflected(A3, B3);
+    __m128i A2B2 = gfmul_reflected(A2, B2);
+    __m128i A1B1 = gfmul_reflected(A1, B1);
+    __m128i A0B0 = gfmul_reflected(A0, B0);
+
+    __m512i AB = gfmul_reflected_avx512_parallel(A, B);
+    char t[64];
+    _mm512_storeu_si512((__m512i*)t, AB);
+    QByteArray ab_byteArray(t, 64);
+
+    _mm_storeu_si128(&((__m128i*)t)[0], A0B0);
+    _mm_storeu_si128(&((__m128i*)t)[1], A1B1);
+    _mm_storeu_si128(&((__m128i*)t)[2], A2B2);
+    _mm_storeu_si128(&((__m128i*)t)[3], A3B3);
+    QByteArray ab_constructed_byteArray(t, 64);
+    if(ab_byteArray == ab_constructed_byteArray){
+        qInfo() << "[TEST - GFMUL AVX512] Assertion:"<< "OK";
+    } else{
+        qInfo() << "[TEST - GFMUL AVX512] Assertion: "<< "WRONG";
+        //qInfo() << "[TEST - GFMUL AVX512] Expected: "<<assert_bytes.toHex();
+        qInfo() << "[TEST - GFMUL AVX512] Actual (normal): "<<ab_constructed_byteArray.toHex();
+        qInfo() << "[TEST - GFMUL AVX512] Actual (512): "<<ab_byteArray.toHex();
+    }
+
+}
+#endif
+
+
 /**
  * @brief print128_hex_lanes
  * This method prints them out in a way such that when you copy past it, to reuse the value, you may only reuse those values in a _mm_set_epi32 instantiation or comparable.
@@ -350,6 +490,7 @@ QString print128_hex_lanes(__m128i var)
 #include <smmintrin.h>
 #include <stdint.h>
 #include <QDebug>
+
 
 void gfmul_times_four_test(){
     // We are testing gfmul_times_four_reflected to 4 times gfmul_reflected
@@ -496,6 +637,10 @@ void gfmul_test(){
 
     const __m128i x = _mm_set_epi32(0x952b2a56, 0xa5604ac0, 0xb32b6656, 0xa05b40b6);
     const __m128i y = _mm_set_epi32(0xdfa6bf4d, 0xed81db03, 0xffcaff95, 0xf830f061);
+    const __m512i x512 = _mm512_set_epi32(0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56);
+    //gfmul_reflected_avx512_parallel(x512, x512);
     gfmul_times_four_test();
+    gfmul_reflected_avx512_parallel_test();
+    //gfmul_reflected_avx512_parallel(a, b, a, b, a, b, a, b);
     BenchmarkUtil::run("gfmul_reflected", gfmul_reflected, x, y);
 }
