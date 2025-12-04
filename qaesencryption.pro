@@ -26,7 +26,8 @@ QMAKE_CXXFLAGS += \
     -mavx512f \
     -mvpclmulqdq \
     -mavx512bw \
-    -march=native
+    -march=native \
+    #-masm=intel    ChatGPT says to not include this as it would only be needed for inline assembler but not for external files
 
 # You can also make your code fail to compile if you use deprecated APIs.
 # In order to do so, uncomment the following line.
@@ -49,10 +50,12 @@ SOURCES += main.cpp \
     gcm/gcm.cpp \
     gcm/gfmul.cpp \
     qaesencryption.cpp \
-    unit_test/aestest.cpp
+    unit_test/aestest.cpp \
+    gcm/asm/gfmul_reflected_avx512.S \
+    gcm/asm/gfmul_reflected_avx128.S
 
 RESOURCES += \
     res.qrc
 
 DISTFILES += \
-    GFMUL_Implementation.md
+    GFMUL_Implementation.md \

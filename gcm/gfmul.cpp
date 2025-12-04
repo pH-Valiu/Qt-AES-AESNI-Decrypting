@@ -3,6 +3,7 @@
 #include <QDebug>
 
 extern "C" void gfmul_reflected_avx512(__m512i* a, __m512i* b, __m512i* result);
+extern "C" void gfmul_reflected_avx128(__m128i* a, __m128i* b, __m128i* result);
 
 /**
  * @brief reflect_xmm code from Intel Doc. A
@@ -451,21 +452,19 @@ void gfmul_reflected_avx512_parallel_test(){
     QByteArray b_b = QByteArray::fromHex("8c8a3eb3d5c7400abfbcee28678335c0fc2962221dc1f7f0f5227b54c850ef961a64fa8afa41d604a273670c413a7a392fd845fa7a215674f6de500b99dce012");
     alignas(64) unsigned char ABytes[64];
     alignas(64) unsigned char BBytes[64];
-    qInfo()<<"ABytes is aligned?"<<isAligned64(ABytes);
-    char tt[64];
-    qInfo()<<"tt is aligned?"<<isAligned64(tt);
     memcpy(ABytes, a_b.constData(), 64);
     memcpy(BBytes, b_b.constData(), 64);
-    __m512i A = _mm512_load_si512((__m512i*) ABytes);
-    __m512i B = _mm512_load_si512((__m512i*) BBytes);
+    alignas(64) __m512i A = _mm512_load_si512((__m512i*) ABytes);
+    alignas(64) __m512i B = _mm512_load_si512((__m512i*) BBytes);
 
     __m128i A3B3 = gfmul_reflected(A3, B3);
     __m128i A2B2 = gfmul_reflected(A2, B2);
     __m128i A1B1 = gfmul_reflected(A1, B1);
     __m128i A0B0 = gfmul_reflected(A0, B0);
 
-    __m512i AB = gfmul_reflected_avx512_parallel(A, B);
-    char t[64];
+    alignas(64) __m512i AB;
+    gfmul_reflected_avx512(&A, &B, &AB);
+    alignas(64) char t[64];
     _mm512_storeu_si512((__m512i*)t, AB);
     QByteArray ab_byteArray(t, 64);
 
@@ -635,7 +634,8 @@ void gfmul_test(){
     res_assert = _mm_set_epi32(0xda53eb0a, 0xd2c55bb6, 0x4fc4802c, 0xc3feda60);
     __m128i res_assert_refl = _mm_set_epi32(0x065B7FC3, 0x340123F2, 0x6DDAA34B, 0x50D7CA5B);
     qInfo() << "a: "<<print128_hex_lanes(a)<<", b: "<<print128_hex_lanes(b);
-    res = gfmul_reflected(a,b);
+    gfmul_reflected_avx128(&a, &b, &res);
+    //res = gfmul_reflected(a,b);
     __m128i res_refl = reflect_xmm(res);
     qInfo() << "res: (a, b, q):\n|>"<<print128_hex_lanes(res);
     //qInfo() << "res_refl: \n|>"<<print128_hex_lanes(res_refl);
@@ -668,18 +668,9 @@ void gfmul_test(){
     const __m128i y = _mm_set_epi32(0xdfa6bf4d, 0xed81db03, 0xffcaff95, 0xf830f061);
     //gfmul_reflected_avx512_parallel(x512, x512);
     gfmul_times_four_test();
-    //gfmul_reflected_avx512_parallel_test();
+    gfmul_reflected_avx512_parallel_test();
 
     __m512i x512 = _mm512_set_epi32(0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56);
-    __m512i tmp;
-    __asm__ volatile("vmovdqu64 %1, %0"
-                     : "=x"(tmp)
-                     : "m"(x512)
-    );
-    qInfo() << "Address of x512: " << &x512;
-    qInfo() << "x512 aligned to 64? " << ((uintptr_t)&x512 % 64 == 0);
-    qInfo() << "Address of tmp: " << &tmp;
-    qInfo() << "tmp aligned to 64? " << ((uintptr_t)&tmp % 64 == 0);
     __m512i result;
     gfmul_reflected_avx512(&x512, &x512, &result);
     BenchmarkUtil::run("gfmul_reflected", gfmul_reflected, x, y);

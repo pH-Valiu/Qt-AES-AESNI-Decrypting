@@ -18,7 +18,6 @@
 #endif
 
 Q_r_512_asm:
-    .quad 0x0000000000000000
     .quad 0xc200000000000000
     .quad 0x0000000000000000
     .quad 0xc200000000000000
@@ -26,6 +25,7 @@ Q_r_512_asm:
     .quad 0xc200000000000000
     .quad 0x0000000000000000
     .quad 0xc200000000000000
+    .quad 0x0000000000000000
 
 #ifdef __ELF__
 .size Q_r_512_asm, 64   # tell the linker its size
@@ -45,7 +45,7 @@ Q_r_512_asm:
 #endif
 
 gfmul_reflected_avx512:
-    # Parameters are passed through registers:
+    # Parameters are passed through pointers: RCX -> a, RDX -> b, R8 -> result:
     # zmm0 := a
     # zmm1 := b
 
