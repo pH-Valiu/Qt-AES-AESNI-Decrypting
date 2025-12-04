@@ -4,6 +4,7 @@
 
 extern "C" void gfmul_reflected_avx512(__m512i* a, __m512i* b, __m512i* result);
 extern "C" void gfmul_reflected_avx128(const __m128i* a, const __m128i* b, __m128i* result);
+extern "C" void gfmul_reflected_avx512_128(const __m128i* a, const __m128i* b, __m128i* result);
 
 /**
  * @brief reflect_xmm code from Intel Doc. A
@@ -441,6 +442,12 @@ __m128i gfmul_reflected_avx128_wrapper(const __m128i& a, const __m128i& b){
     return res;
 }
 
+__m128i gfmul_reflected_avx512_128_wrapper(const __m128i& a, const __m128i& b){
+    __m128i res;
+    gfmul_reflected_avx512_128(&a, &b, &res);
+    return res;
+}
+
 void gfmul_times_four_test(){
     // We are testing gfmul_times_four_reflected to 4 times gfmul_reflected
     __m128i H = _mm_loadu_si128((__m128i*) QByteArray::fromHex("b83b533708bf535d0aa6e52980d53b78").constData());
@@ -597,5 +604,6 @@ void gfmul_test(){
     gfmul_reflected_avx512_parallel_test();
     BenchmarkUtil::run("gfmul_reflected", gfmul_reflected, x, y);
     BenchmarkUtil::run("gfmul_reflected_avx128", gfmul_reflected_avx128_wrapper, x, y);
+    BenchmarkUtil::run("gfmul_reflected_avx512_128", gfmul_reflected_avx512_128_wrapper, x, y);
     BenchmarkUtil::run("gfmul_reflected_avx512", gfmul_reflected_avx512, &A512, &B512, &res512);
 }

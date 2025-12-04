@@ -39,11 +39,68 @@ Q_r_512_asm:
 .text
 .intel_syntax noprefix
 .global gfmul_reflected_avx512
+.global gfmul_reflected_avx512_128
 
 #ifdef __ELF__
 .type gfmul_reflected_avx512, @function
 #endif
 
+gfmul_reflected_avx512_128:
+    vmovdqu xmm0, [rcx]
+    vmovdqu xmm1, [rdx]
+
+    vpclmulqdq xmm2, xmm0, xmm1, 0x00   # a0b0
+    vpclmulqdq xmm3, xmm0, xmm1, 0x01   # a1b0
+    vpclmulqdq xmm4, xmm0, xmm1, 0x10   # a0b1
+    vpclmulqdq xmm5, xmm0, xmm1, 0x11   # a1b1
+
+    vpxord xmm3, xmm3, xmm4             # xmm3 := mid = a1b0 + a0b1
+
+    vpslldq xmm4, xmm3, 8               # xmm4 := mid <<_epi128 64
+    vpxord xmm1, xmm2, xmm4             # xmm1 := lo = a0b0 xor (mid <<_epi128 64)
+
+    vpsrldq xmm4, xmm3, 8               # xmm4 := mid >>_epi128 64
+    vpxord xmm0, xmm5, xmm4             # xmm0 := hi = a1b1 xor (mid >>_epi128 64)
+
+    # Now xmm0 := hi; xmm1 := lo
+
+    # Step 1.1: Bitshift <<_epi1024 1
+    vpsrld xmm2, xmm1, 31               # xmm2 := lo_32bitMSB = lo >>_epi32 31
+    vpsrld xmm3, xmm0, 31               # xmm3 := hi_32bitMSB = hi >>_epi32 31
+    vpslld xmm1, xmm1, 1                # xmm1 := lo = lo <<_epi32 1
+    vpslld xmm0, xmm0, 1                # xmm0 := hi = hi <<_epi32 1
+    vpsrldq xmm4, xmm2, 12              # xmm4 := lo_128bitMSB = lo_32bitMSB >>_epi128 96
+    vpslldq xmm2, xmm2, 4               # xmm2 := lo_32bitMSB = lo_32bitMSB <<_epi128 32
+    vpslldq xmm3, xmm3, 4               # xmm3 := hi_32bitMSB = hi_32bitMSB <<_epi128 32
+    vpord xmm1, xmm1, xmm2              # xmm1 := lo = lo | lo_32bitMSB
+    vpord xmm0, xmm0, xmm3              # xmm0 := hi = hi | hi_32bitMSB
+    vpord xmm0, xmm0, xmm4              # xmm0 := hi = hi | lo_128bitMSB
+
+    # Step 2.0: Load constants
+    vmovdqu xmm6, [rip + Q_r_128_asm]     # xmm6 := Q_r_128
+    vpxord xmm7, xmm7, xmm7                 # xmm7 := xERO (storing xERO as constant and loading twice is more load than just doing one xor every time)
+
+    # Step 2.1: Reduce
+    vpclmulqdq xmm2, xmm1, xmm6, 0x00   # xmm2 := x = lo_epi128[0] * Q_r_epi128[0]
+    vpsrldq xmm3, xmm2, 8               # xmm3 := x >>_epi128 64
+    vpxord xmm0, xmm0, xmm3             # xmm0 := hi = hi xor (x >>_epi128 64)
+    vpunpcklqdq xmm3, xmm1, xmm7        # xmm3 := _mm512_unpacklo_epi64(lo, xERO)
+    vpxord xmm0, xmm0, xmm3             # xmm0 := hi = hi xor (_mm512_unpacklo_epi64(lo, xERO))
+    vpslldq xmm3, xmm2, 8               # xmm3 := x <<_epi128 64
+    vpxord xmm1, xmm1, xmm3             # xmm1 := lo = lo xor (x <<_epi128 64)
+
+    # Step 2.2: Reduce
+    vpclmulqdq xmm2, xmm1, xmm6, 0x01   # xmm2 := x = lo_epi128[1] * Q_r_epi128[0]
+    vpxord xmm0, xmm0, xmm2             # xmm0 := hi = hi xor x
+    vpunpckhqdq xmm3, xmm7, xmm1        # xmm3 := _mm512_unpackhi_epi64(xERO, lo)
+    vpxord xmm0, xmm0, xmm3             # xmm0 := hi = hi xor (_mm512_unpackhi_epi64(xERO, lo))
+
+
+    # Step 3: Return hi
+    # Return value must be supplied through:
+    # xmm0 := returnVal
+    vmovdqu [r8], xmm0
+    ret
 # The goal is to perform gfmul_reflected on all 4 quad words (__m128i) at the same time
 # Therefore, each step must be seen as happening independept on each quad word
 # To understand the commands, look at the C++ implementation of gfmul_reflected for __m128i and transpose to __m512
