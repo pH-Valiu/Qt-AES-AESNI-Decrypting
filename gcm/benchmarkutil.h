@@ -47,6 +47,55 @@ public:
     // Public entry point
     // =============================
     using GfMulFunc = __m128i(*)(const __m128i&, const __m128i&);
+    using GfMulFunc512 = void(*)(__m512i* a, __m512i* b, __m512i* res);
+
+    static void run(const QString &name,
+                    GfMulFunc512 func,
+                    __m512i* fixedA,
+                    __m512i* fixedB,
+                    __m512i* resPtr,
+                    int warmupIters = 20000,
+                    int measureIters = 100000,
+                    int perCallSamples = 200){
+        // Warm-up
+        for (int i = 0; i < warmupIters; i++)
+            func(fixedA, fixedB, resPtr);
+
+        // Block measurement
+        QVector<quint64> blockTimes;
+        blockTimes.reserve(20);
+        for (int s = 0; s < 20; s++) {
+            quint64 start = __rdtsc();
+            for (int i = 0; i < measureIters; i++)
+                func(fixedA, fixedB, resPtr);
+            quint64 end = __rdtsc();
+            blockTimes.append((end - start) / measureIters);
+        }
+        Stats blockStats = computeStats(blockTimes);
+
+        // Per-call measurement
+        qInfo()<<"No random input in per-call measurements";
+        QVector<quint64> rawCycles;
+        QVector<quint64> singleTimes;
+        singleTimes.reserve(perCallSamples);
+        for (int i = 0; i < perCallSamples; i++) {
+            quint64 start = __rdtsc();
+            func(fixedA, fixedB, resPtr);
+            quint64 end = __rdtsc();
+            singleTimes.append(end - start);
+        }
+
+        double cpuGHz = calibratedCPUGHz();
+        QVector<quint64> rawNs;
+        rawNs.reserve(singleTimes.size());
+        for (quint64 c : singleTimes) rawNs.append(quint64(c / cpuGHz));
+
+        qInfo() << "--------- Block measurement ---------";
+        printStats(blockStats);
+        qInfo() << "--------- Per-call timing ---------";
+        printStats(computeStats(singleTimes));
+        printHistogramRaw(rawNs, "Per-call histogram (ns)");
+    }
 
     static void run(const QString &name,
                     GfMulFunc func,

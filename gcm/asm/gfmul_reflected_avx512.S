@@ -44,6 +44,13 @@ Q_r_512_asm:
 .type gfmul_reflected_avx512, @function
 #endif
 
+# The goal is to perform gfmul_reflected on all 4 quad words (__m128i) at the same time
+# Therefore, each step must be seen as happening independept on each quad word
+# To understand the commands, look at the C++ implementation of gfmul_reflected for __m128i and transpose to __m512
+
+# The main reason for implementing it in assembly directly is because of a known old MinGW Windows bug that causes alignment issues when off shoring __m512 to stack.
+# Therefore, __m512 representation can only be used temporary for specific computations.
+# For the rest, we must use assembler code and pass parameters and return buffer as pointers.
 gfmul_reflected_avx512:
     # Parameters are passed through pointers: RCX -> a, RDX -> b, R8 -> result:
     # zmm0 := a
