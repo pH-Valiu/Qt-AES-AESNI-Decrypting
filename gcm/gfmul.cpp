@@ -2,6 +2,7 @@
 #include "gcm/benchmarkutil.h"
 #include <QDebug>
 
+extern "C" void gfmul_reflected_avx512(__m512i* a, __m512i* b, __m512i* result);
 
 /**
  * @brief reflect_xmm code from Intel Doc. A
@@ -350,18 +351,24 @@ __m512i gfmul_reflected_avx512_parallel(
     // The goal is to perform gfmul_reflected on all 4 quad words (__m128i) at the same time
     // Therefore, each step must be seen as happening independept on each quad word
 
-    // Step 1.0: Multiplication
-    __m512i a0b0 = _mm512_clmulepi64_epi128(a, b, 0x00);
-    __m512i a1b0 = _mm512_clmulepi64_epi128(a, b, 0x01);
-    __m512i a0b1 = _mm512_clmulepi64_epi128(a, b, 0x10);
-    __m512i a1b1 = _mm512_clmulepi64_epi128(a, b, 0x11);
 
+
+    // Step 1.0: Multiplication
+    __m512i a0b0, a1b0, a0b1, a1b1;
+    a0b0 = _mm512_clmulepi64_epi128(a, b, 0x00);
+    a1b0 = _mm512_clmulepi64_epi128(a, b, 0x01);
+    a0b1 = _mm512_clmulepi64_epi128(a, b, 0x10);
+    a1b1 = _mm512_clmulepi64_epi128(a, b, 0x11);
+
+
+    __m512i lo, hi, mid;
     // compute mid
-    __m512i mid = _mm512_xor_si512(a1b0, a0b1);
+    mid = _mm512_xor_si512(a1b0, a0b1);
 
     // compute high and low (for each quad word respectively)
-    __m512i lo = _mm512_xor_si512(a0b0, _mm512_bslli_epi128(mid, 8));
-    __m512i hi = _mm512_xor_si512(a1b1, _mm512_bsrli_epi128(mid, 8));
+    lo = _mm512_xor_si512(a0b0, _mm512_bslli_epi128(mid, 8));
+    hi = _mm512_xor_si512(a1b1, _mm512_bsrli_epi128(mid, 8));
+
 
     // Step 1.1: Bitshift << 1
     __m512i lo_32bitMSB, hi_32bitMSB, lo_128bitMSB;
@@ -375,6 +382,7 @@ __m512i gfmul_reflected_avx512_parallel(
     lo = _mm512_or_si512(lo, lo_32bitMSB);
     hi = _mm512_or_si512(hi, hi_32bitMSB);
     hi = _mm512_or_si512(hi, lo_128bitMSB);
+
 
     // Step 2.1: Reduce
     __m512i x = _mm512_clmulepi64_epi128(lo, Q_r_512, 0x00);
@@ -417,19 +425,39 @@ QString print512_hex_lanes(const __m512i& var)
     return s;
 }
 
+bool isAligned64(const void* p) {
+    return (reinterpret_cast<uintptr_t>(p) & 63) == 0;
+}
 
 void gfmul_reflected_avx512_parallel_test(){
-    __m128i A3 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("9ca1a8db76a56facaea9510ce2e91845").constData());
-    __m128i A2 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("1d98752cf482a50136339f5e32f58d11").constData());
-    __m128i A1 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("9171b78cafdaed1399e4570c16b0e3a2").constData());
-    __m128i A0 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("50e27ae11262ca8c81f992482a947930").constData());
-    __m128i B3 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("2fd845fa7a215674f6de500b99dce012").constData());
-    __m128i B2 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("1a64fa8afa41d604a273670c413a7a39").constData());
-    __m128i B1 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("fc2962221dc1f7f0f5227b54c850ef96").constData());
-    __m128i B0 = _mm_loadu_si128((__m128i*) QByteArray::fromHex("8c8a3eb3d5c7400abfbcee28678335c0").constData());
+    QByteArray a3_b = QByteArray::fromHex("9ca1a8db76a56facaea9510ce2e91845");
+    QByteArray a2_b = QByteArray::fromHex("1d98752cf482a50136339f5e32f58d11");
+    QByteArray a1_b = QByteArray::fromHex("9171b78cafdaed1399e4570c16b0e3a2");
+    QByteArray a0_b = QByteArray::fromHex("50e27ae11262ca8c81f992482a947930");
+    QByteArray b3_b = QByteArray::fromHex("2fd845fa7a215674f6de500b99dce012");
+    QByteArray b2_b = QByteArray::fromHex("1a64fa8afa41d604a273670c413a7a39");
+    QByteArray b1_b = QByteArray::fromHex("fc2962221dc1f7f0f5227b54c850ef96");
+    QByteArray b0_b = QByteArray::fromHex("8c8a3eb3d5c7400abfbcee28678335c0");
+    __m128i A3 = _mm_loadu_si128((__m128i*) a3_b.constData());
+    __m128i A2 = _mm_loadu_si128((__m128i*) a2_b.constData());
+    __m128i A1 = _mm_loadu_si128((__m128i*) a1_b.constData());
+    __m128i A0 = _mm_loadu_si128((__m128i*) a0_b.constData());
+    __m128i B3 = _mm_loadu_si128((__m128i*) b3_b.constData());
+    __m128i B2 = _mm_loadu_si128((__m128i*) b2_b.constData());
+    __m128i B1 = _mm_loadu_si128((__m128i*) b1_b.constData());
+    __m128i B0 = _mm_loadu_si128((__m128i*) b0_b.constData());
 
-    __m512i A = _mm512_loadu_si512((__m512i*) QByteArray::fromHex("50e27ae11262ca8c81f992482a9479309171b78cafdaed1399e4570c16b0e3a21d98752cf482a50136339f5e32f58d119ca1a8db76a56facaea9510ce2e91845").constData());
-    __m512i B = _mm512_loadu_si512((__m512i*) QByteArray::fromHex("8c8a3eb3d5c7400abfbcee28678335c0fc2962221dc1f7f0f5227b54c850ef961a64fa8afa41d604a273670c413a7a392fd845fa7a215674f6de500b99dce012").constData());
+    QByteArray a_b = QByteArray::fromHex("50e27ae11262ca8c81f992482a9479309171b78cafdaed1399e4570c16b0e3a21d98752cf482a50136339f5e32f58d119ca1a8db76a56facaea9510ce2e91845");
+    QByteArray b_b = QByteArray::fromHex("8c8a3eb3d5c7400abfbcee28678335c0fc2962221dc1f7f0f5227b54c850ef961a64fa8afa41d604a273670c413a7a392fd845fa7a215674f6de500b99dce012");
+    alignas(64) unsigned char ABytes[64];
+    alignas(64) unsigned char BBytes[64];
+    qInfo()<<"ABytes is aligned?"<<isAligned64(ABytes);
+    char tt[64];
+    qInfo()<<"tt is aligned?"<<isAligned64(tt);
+    memcpy(ABytes, a_b.constData(), 64);
+    memcpy(BBytes, b_b.constData(), 64);
+    __m512i A = _mm512_load_si512((__m512i*) ABytes);
+    __m512i B = _mm512_load_si512((__m512i*) BBytes);
 
     __m128i A3B3 = gfmul_reflected(A3, B3);
     __m128i A2B2 = gfmul_reflected(A2, B2);
@@ -446,11 +474,12 @@ void gfmul_reflected_avx512_parallel_test(){
     _mm_storeu_si128(&((__m128i*)t)[2], A2B2);
     _mm_storeu_si128(&((__m128i*)t)[3], A3B3);
     QByteArray ab_constructed_byteArray(t, 64);
+
+
     if(ab_byteArray == ab_constructed_byteArray){
         qInfo() << "[TEST - GFMUL AVX512] Assertion:"<< "OK";
     } else{
         qInfo() << "[TEST - GFMUL AVX512] Assertion: "<< "WRONG";
-        //qInfo() << "[TEST - GFMUL AVX512] Expected: "<<assert_bytes.toHex();
         qInfo() << "[TEST - GFMUL AVX512] Actual (normal): "<<ab_constructed_byteArray.toHex();
         qInfo() << "[TEST - GFMUL AVX512] Actual (512): "<<ab_byteArray.toHex();
     }
@@ -637,10 +666,21 @@ void gfmul_test(){
 
     const __m128i x = _mm_set_epi32(0x952b2a56, 0xa5604ac0, 0xb32b6656, 0xa05b40b6);
     const __m128i y = _mm_set_epi32(0xdfa6bf4d, 0xed81db03, 0xffcaff95, 0xf830f061);
-    const __m512i x512 = _mm512_set_epi32(0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56);
     //gfmul_reflected_avx512_parallel(x512, x512);
     gfmul_times_four_test();
-    gfmul_reflected_avx512_parallel_test();
-    //gfmul_reflected_avx512_parallel(a, b, a, b, a, b, a, b);
+    //gfmul_reflected_avx512_parallel_test();
+
+    __m512i x512 = _mm512_set_epi32(0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56, 0x952b2a56);
+    __m512i tmp;
+    __asm__ volatile("vmovdqu64 %1, %0"
+                     : "=x"(tmp)
+                     : "m"(x512)
+    );
+    qInfo() << "Address of x512: " << &x512;
+    qInfo() << "x512 aligned to 64? " << ((uintptr_t)&x512 % 64 == 0);
+    qInfo() << "Address of tmp: " << &tmp;
+    qInfo() << "tmp aligned to 64? " << ((uintptr_t)&tmp % 64 == 0);
+    __m512i result;
+    gfmul_reflected_avx512(&x512, &x512, &result);
     BenchmarkUtil::run("gfmul_reflected", gfmul_reflected, x, y);
 }

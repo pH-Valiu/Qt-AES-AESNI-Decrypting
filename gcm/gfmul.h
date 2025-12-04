@@ -38,8 +38,8 @@ __m512i gfmul_reflected_avx512_parallel(const __m512i a, const __m512i b);
 QString print512_hex_lanes(const __m512i& var);
 void gfmul_reflected_avx512_parallel_test();
 
-static __m512i ZERO_512 = _mm512_setzero_si512();
-static __m512i Q_r_512 = _mm512_set_epi32(0, 0, 0xc2000000, 0, 0, 0, 0xc2000000, 0, 0, 0, 0xc2000000, 0, 0, 0, 0xc2000000, 0);
+alignas(64) static __m512i ZERO_512 = _mm512_setzero_si512();
+alignas(64) static __m512i Q_r_512 = _mm512_set_epi32(0, 0, 0xc2000000, 0, 0, 0, 0xc2000000, 0, 0, 0, 0xc2000000, 0, 0, 0, 0xc2000000, 0);
 #endif
 
 #endif // GFMUL_H
