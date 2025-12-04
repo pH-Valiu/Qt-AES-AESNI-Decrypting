@@ -3,7 +3,7 @@
 #include <QDebug>
 
 extern "C" void gfmul_reflected_avx512(__m512i* a, __m512i* b, __m512i* result);
-extern "C" void gfmul_reflected_avx128(__m128i* a, __m128i* b, __m128i* result);
+extern "C" void gfmul_reflected_avx128(const __m128i* a, const __m128i* b, __m128i* result);
 
 /**
  * @brief reflect_xmm code from Intel Doc. A
@@ -519,6 +519,11 @@ QString print128_hex_lanes(__m128i var)
 #include <stdint.h>
 #include <QDebug>
 
+__m128i gfmul_reflected_avx128_wrapper(const __m128i& a, const __m128i& b){
+    __m128i res;
+    gfmul_reflected_avx128(&a, &b, &res);
+    return res;
+}
 
 void gfmul_times_four_test(){
     // We are testing gfmul_times_four_reflected to 4 times gfmul_reflected
@@ -664,8 +669,8 @@ void gfmul_test(){
     qInfo() << "test: a15:|" <<arr[15]<<", "<<arr[14]<<", "<<arr[13]<<", "<<arr[12]<<", "<<arr[11]<<", "<<arr[10]<<", "<<arr[9]<<", "<<arr[8]<<", "<<arr[7]<<", "<<arr[6]<<", "<<arr[5]<<", "<<arr[4]<<", "<<arr[3]<<", "<<arr[2]<<", "<<arr[1]<<", "<<arr[0]<<"|:a0";
 
 
-    const __m128i x = _mm_set_epi32(0x952b2a56, 0xa5604ac0, 0xb32b6656, 0xa05b40b6);
-    const __m128i y = _mm_set_epi32(0xdfa6bf4d, 0xed81db03, 0xffcaff95, 0xf830f061);
+    __m128i x = _mm_set_epi32(0x952b2a56, 0xa5604ac0, 0xb32b6656, 0xa05b40b6);
+    __m128i y = _mm_set_epi32(0xdfa6bf4d, 0xed81db03, 0xffcaff95, 0xf830f061);
     //gfmul_reflected_avx512_parallel(x512, x512);
     gfmul_times_four_test();
     gfmul_reflected_avx512_parallel_test();
@@ -674,4 +679,5 @@ void gfmul_test(){
     __m512i result;
     gfmul_reflected_avx512(&x512, &x512, &result);
     BenchmarkUtil::run("gfmul_reflected", gfmul_reflected, x, y);
+    BenchmarkUtil::run("gfmul_reflected_avx128", gfmul_reflected_avx128_wrapper, x, y);
 }

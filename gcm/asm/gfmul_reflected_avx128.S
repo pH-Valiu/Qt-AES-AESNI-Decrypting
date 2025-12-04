@@ -30,6 +30,7 @@ Q_r_128_asm:
 #--------------------
 # ALGORITHM
 #--------------------
+# This algorithm is suited for an environment with just SSE instructions without AVX-512
 
 .text
 .intel_syntax noprefix
@@ -113,7 +114,7 @@ gfmul_reflected_avx128:
 
     # Step 3: Return hi
     # Return value must be supplied through:
-    # zmm0 := returnVal
+    # xmm0 := returnVal
     # or into pointer
     movdqu [r8], xmm5
     ret
