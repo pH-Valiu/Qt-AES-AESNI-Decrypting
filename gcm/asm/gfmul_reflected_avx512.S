@@ -45,6 +45,7 @@ Q_r_512_asm:
 .type gfmul_reflected_avx512, @function
 #endif
 
+# This is faster than gfmul_reflected_avx128
 gfmul_reflected_avx512_128:
     vmovdqu xmm0, [rcx]
     vmovdqu xmm1, [rdx]
