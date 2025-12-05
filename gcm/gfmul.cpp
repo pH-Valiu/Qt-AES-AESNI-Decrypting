@@ -2,9 +2,9 @@
 #include "gcm/benchmarkutil.h"
 #include <QDebug>
 
-extern "C" void gfmul_reflected_avx512(__m512i* a, __m512i* b, __m512i* result);
-extern "C" void gfmul_reflected_avx128(const __m128i* a, const __m128i* b, __m128i* result);
+extern "C" void gfmul_reflected_avx512_512(__m512i* a, __m512i* b, __m512i* result);
 extern "C" void gfmul_reflected_avx512_128(const __m128i* a, const __m128i* b, __m128i* result);
+extern "C" void gfmul_reflected_avx128(const __m128i* a, const __m128i* b, __m128i* result);
 
 /**
  * @brief reflect_xmm code from Intel Doc. A
@@ -380,7 +380,7 @@ void gfmul_reflected_avx512_parallel_test(){
     __m128i A0B0 = gfmul_reflected(A0, B0);
 
     __m512i AB;
-    gfmul_reflected_avx512(&A, &B, &AB);
+    gfmul_reflected_avx512_512(&A, &B, &AB);
     char t[64];
     _mm512_storeu_si512((__m512i*)t, AB);
     QByteArray ab_byteArray(t, 64);
@@ -562,7 +562,7 @@ void gfmul_test(){
     res_assert = _mm_set_epi32(0xda53eb0a, 0xd2c55bb6, 0x4fc4802c, 0xc3feda60);
     __m128i res_assert_refl = _mm_set_epi32(0x065B7FC3, 0x340123F2, 0x6DDAA34B, 0x50D7CA5B);
     qInfo() << "a: "<<print128_hex_lanes(a)<<", b: "<<print128_hex_lanes(b);
-    //gfmul_reflected_avx128(&a, &b, &res);     // This line can be used to test the assembly implementation
+    //gfmul_reflected_avx512_128(&a, &b, &res);     // This line can be used to test the assembly implementation
     res = gfmul_reflected(a,b);
     __m128i res_refl = reflect_xmm(res);
     qInfo() << "res: (a, b, q):\n|>"<<print128_hex_lanes(res);
@@ -605,5 +605,5 @@ void gfmul_test(){
     BenchmarkUtil::run("gfmul_reflected", gfmul_reflected, x, y);
     BenchmarkUtil::run("gfmul_reflected_avx128", gfmul_reflected_avx128_wrapper, x, y);
     BenchmarkUtil::run("gfmul_reflected_avx512_128", gfmul_reflected_avx512_128_wrapper, x, y);
-    BenchmarkUtil::run("gfmul_reflected_avx512", gfmul_reflected_avx512, &A512, &B512, &res512);
+    BenchmarkUtil::run("gfmul_reflected_avx512", gfmul_reflected_avx512_512, &A512, &B512, &res512);
 }

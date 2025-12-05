@@ -47,12 +47,12 @@ HEADERS += \
     unit_test/aestest.h
 
 SOURCES += main.cpp \
+    gcm/asm/gfmul_reflected_AVX_512.S \
+    gcm/asm/gfmul_reflected_SSE.S \
     gcm/gcm.cpp \
     gcm/gfmul.cpp \
     qaesencryption.cpp \
-    unit_test/aestest.cpp \
-    gcm/asm/gfmul_reflected_avx512.S \
-    gcm/asm/gfmul_reflected_avx128.S
+    unit_test/aestest.cpp
 
 RESOURCES += \
     res.qrc

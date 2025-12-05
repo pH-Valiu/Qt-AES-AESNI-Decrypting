@@ -38,14 +38,15 @@ Q_r_512_asm:
 
 .text
 .intel_syntax noprefix
-.global gfmul_reflected_avx512
+.global gfmul_reflected_avx512_512
 .global gfmul_reflected_avx512_128
 
 #ifdef __ELF__
-.type gfmul_reflected_avx512, @function
+.type gfmul_reflected_avx512_512, @function
+.type gfmul_reflected_avx512_128, @function
 #endif
 
-# This is faster than gfmul_reflected_avx128
+# This is faster than gfmul_reflected_avx128 because it uses AVX-512 instructions
 gfmul_reflected_avx512_128:
     vmovdqu xmm0, [rcx]
     vmovdqu xmm1, [rdx]
@@ -79,22 +80,22 @@ gfmul_reflected_avx512_128:
 
     # Step 2.0: Load constants
     vmovdqu xmm6, [rip + Q_r_128_asm]     # xmm6 := Q_r_128
-    vpxord xmm7, xmm7, xmm7                 # xmm7 := xERO (storing xERO as constant and loading twice is more load than just doing one xor every time)
+    vpxord xmm7, xmm7, xmm7                 # xmm7 := ZERO (storing ZERO as constant and loading twice is more load than just doing one xor every time)
 
     # Step 2.1: Reduce
     vpclmulqdq xmm2, xmm1, xmm6, 0x00   # xmm2 := x = lo_epi128[0] * Q_r_epi128[0]
     vpsrldq xmm3, xmm2, 8               # xmm3 := x >>_epi128 64
     vpxord xmm0, xmm0, xmm3             # xmm0 := hi = hi xor (x >>_epi128 64)
-    vpunpcklqdq xmm3, xmm1, xmm7        # xmm3 := _mm512_unpacklo_epi64(lo, xERO)
-    vpxord xmm0, xmm0, xmm3             # xmm0 := hi = hi xor (_mm512_unpacklo_epi64(lo, xERO))
+    vpunpcklqdq xmm3, xmm1, xmm7        # xmm3 := _mm_unpacklo_epi64(lo, ZERO)
+    vpxord xmm0, xmm0, xmm3             # xmm0 := hi = hi xor (_mm_unpacklo_epi64(lo, ZERO))
     vpslldq xmm3, xmm2, 8               # xmm3 := x <<_epi128 64
     vpxord xmm1, xmm1, xmm3             # xmm1 := lo = lo xor (x <<_epi128 64)
 
     # Step 2.2: Reduce
     vpclmulqdq xmm2, xmm1, xmm6, 0x01   # xmm2 := x = lo_epi128[1] * Q_r_epi128[0]
     vpxord xmm0, xmm0, xmm2             # xmm0 := hi = hi xor x
-    vpunpckhqdq xmm3, xmm7, xmm1        # xmm3 := _mm512_unpackhi_epi64(xERO, lo)
-    vpxord xmm0, xmm0, xmm3             # xmm0 := hi = hi xor (_mm512_unpackhi_epi64(xERO, lo))
+    vpunpckhqdq xmm3, xmm7, xmm1        # xmm3 := _mm_unpackhi_epi64(ZERO, lo)
+    vpxord xmm0, xmm0, xmm3             # xmm0 := hi = hi xor (_mm_unpackhi_epi64(ZERO, lo))
 
 
     # Step 3: Return hi
@@ -102,6 +103,9 @@ gfmul_reflected_avx512_128:
     # xmm0 := returnVal
     vmovdqu [r8], xmm0
     ret
+
+
+
 # The goal is to perform gfmul_reflected on all 4 quad words (__m128i) at the same time
 # Therefore, each step must be seen as happening independept on each quad word
 # To understand the commands, look at the C++ implementation of gfmul_reflected for __m128i and transpose to __m512
@@ -109,7 +113,7 @@ gfmul_reflected_avx512_128:
 # The main reason for implementing it in assembly directly is because of a known old MinGW Windows bug that causes alignment issues when off shoring __m512 to stack.
 # Therefore, __m512 representation can only be used temporary for specific computations.
 # For the rest, we must use assembler code and pass parameters and return buffer as pointers.
-gfmul_reflected_avx512:
+gfmul_reflected_avx512_512:
     # Parameters are passed through pointers: RCX -> a, RDX -> b, R8 -> result:
     # zmm0 := a
     # zmm1 := b
@@ -175,7 +179,8 @@ gfmul_reflected_avx512:
     ret
 
 #ifdef __ELF__
-.size gfmul_reflected_avx512, .-gfmul_reflected_avx512
+.size gfmul_reflected_avx512_512, .-gfmul_reflected_avx512_512
+.size gfmul_reflected_avx512_128, .-gfmul_reflected_avx512_128
 #endif
 
 .att_syntax
