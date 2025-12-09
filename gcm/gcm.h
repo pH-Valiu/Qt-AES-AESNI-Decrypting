@@ -37,7 +37,7 @@ struct GCM_OUT encrypt(const QByteArray& key, const QByteArray& iv, const QByteA
  * @param c
  * @param t
  * @param out modifyable QByteArray in which the plaintext will be stored after decryption
- * @return true if the authentication of the tag was correct, false if the tags do not match
+ * @return true if the authentication of the tag was correct, false if the tags do not match (or parameters do not adhere to required lengths)
  */
 bool decrypt(const QByteArray& key, const QByteArray& iv, const QByteArray& aad, const QByteArray& c, const QByteArray& t, QByteArray& out);
 bool decrypt(const QByteArray& key, const QByteArray& iv, const QByteArray& aad, const struct GCM_OUT& gcm_out, QByteArray& out);

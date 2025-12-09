@@ -191,18 +191,19 @@ GCM_OUT encrypt(const QByteArray &key, const QByteArray &iv, const QByteArray &a
     return out;
 }
 
+bool decrypt(const QByteArray &key, const QByteArray &iv, const QByteArray &aad, const GCM_OUT &gcm_out, QByteArray &out){
+    return decrypt(key, iv, aad, gcm_out.c, gcm_out.t, out);
+}
 
 bool decrypt(const QByteArray &key, const QByteArray &iv, const QByteArray &aad, const QByteArray &c, const QByteArray &t, QByteArray &out){
-    return false;
-    /*
     // 0.1: Check instruction set support
-    if(!(AES_GCM_Compatability::hasAES() && AES_GCM_Compatability::hasAVX2() && AES_GCM_Compatability::hasPCLMUL())) {
-        throw std::runtime_error("CPU does not support required AES-GCM instructions (AES-NI, PCLMUL, AVX2");
+    if(!(AES_GCM_Compatability::hasAES() && AES_GCM_Compatability::hasAVX2() && AES_GCM_Compatability::hasPCLMUL() && AES_GCM_Compatability::hasAVX512())) {
+        throw std::runtime_error("CPU does not support required AES-GCM instructions (AES-NI, PCLMUL, AVX2, AVX512");
     }
 
     // 0.2: Check max lengths of paramteres following NIST specification (NIST 800-38d)
-    if(key.length() != gcm_keyLength || iv.isEmpty() || iv.length() > MAX_IV_LEN || aad.length() > MAX_AAD_LEN || p.length() > MAX_PLAIN_LEN) {
-        return GCM_OUT();
+    if(key.length() != gcm_keyLength || iv.isEmpty() || iv.length() > MAX_IV_LEN || aad.length() > MAX_AAD_LEN || c.length() > MAX_PLAIN_LEN) {
+        return false;
     }
 
     // 0.3: Key Expansion
@@ -214,11 +215,6 @@ bool decrypt(const QByteArray &key, const QByteArray &iv, const QByteArray &aad,
     __m128i last_block = ZERO;
     __m128i X = ZERO;           // X is used for the running GHASH calculation state
     unsigned int i, j;
-
-    GCM_OUT out;
-    out.c.resize(p.length());
-    out.t.resize(16);
-    char* c_link = out.c.data();
 
     // 1: H = AES_k(0^128)
     H = singleAESBlock(ZERO, aesKey);
@@ -271,9 +267,43 @@ bool decrypt(const QByteArray &key, const QByteArray &iv, const QByteArray &aad,
         X = gfmul_reflected(X, H);
     }
 
+    // 5. add Ciphertext to X tag
+    for(i=0; i<c.length()/16; i++){
+        tmp1 = _mm_loadu_si128(&((__m128i*)c.constData())[i]);
+        tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
+        X = _mm_xor_si128(X, tmp1);
+        X = gfmul_reflected(X, H);
+    }
+    if(c.length() % 16){
+        last_block = ZERO;
+        for(j=0; j<c.length() % 16; j++){
+            ((unsigned char*) &last_block)[j] = c[i*16 + j];
+        }
+        tmp1 = _mm_shuffle_epi8(last_block, BSWAP_MASK);
+        X = _mm_xor_si128(X, tmp1);
+        X = gfmul_reflected(X, H);
+    }
+    tmp1 = _mm_insert_epi64(tmp1, c.length()*8, 0);
+    tmp1 = _mm_insert_epi64(tmp1, aad.length()*8, 1);
+
+    X = _mm_xor_si128(X, tmp1);
+    X = gfmul_reflected(X, H);
+    X = _mm_shuffle_epi8(X, BSWAP_MASK);        // bring final GHASH state back to normal world
+    T = _mm_xor_si128(X, T);
+
+    // secure constant time check zero-equivalence check
+    T = _mm_xor_si128(T, _mm_loadu_si128((__m128i*) t.constData()));
+    if (!_mm_test_all_zeros(T, T)) {        // if not all values are zero -> tags do not match
+        return false;
+    }
+
+    // 6. Decrypt Ciphertext
+    out.resize(c.length());
+    char* out_link = out.data();
+
     // 5. Ciphertext computation
     ctr1 = Y0;
-    for(i=0; i<p.length() / 16; i++) {      // we traverse all **full** 16byte blocks of p
+    for(i=0; i<c.length() / 16; i++) {      // we traverse all **full** 16byte blocks of p
         ctr1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
         ctr1 = _mm_add_epi32(ctr1, ONE);                    // increase ctr1 <- ctr1 + 1
         ctr1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
@@ -281,48 +311,26 @@ bool decrypt(const QByteArray &key, const QByteArray &iv, const QByteArray &aad,
         tmp1 = singleAESBlock(ctr1, aesKey);                // encrypt (j0 + 1) -> tmp1
 
         // the _mm_loadu_si128 is necessary because the data might not be 16Byte aligned
-        tmp1 = _mm_xor_si128(tmp1, _mm_loadu_si128(&((__m128i*)p.constData())[i]));     // xor tmp1 with p block -> c block
+        tmp1 = _mm_xor_si128(tmp1, _mm_loadu_si128(&((__m128i*)c.constData())[i]));     // xor tmp1 with p block -> c block
 
         // the _mm_store_si128 is necessary because the destination might not be 16Byte aligned
-        _mm_storeu_si128(&((__m128i*)c_link)[i], tmp1);           // store c block in out
-
-        tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);          // bring c block to reverse world
-
-        X = _mm_xor_si128(X, tmp1);
-        X = gfmul_reflected(X, H);                          // update GHASH state with currently computed ciphertext C
+        _mm_storeu_si128(&((__m128i*)out_link)[i], tmp1);           // store c block in out
     }
-    if(p.length() % 16){            // handle last block if necessary
+    if(c.length() % 16){            // handle last block if necessary
         ctr1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
         ctr1 = _mm_add_epi32(ctr1, ONE);
         ctr1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
 
         tmp1 = singleAESBlock(ctr1, aesKey);     // encrypt (j0 + 1) -> tmp1
 
-        tmp1 = _mm_xor_si128(tmp1, _mm_loadu_si128(&((__m128i*)p.constData())[i]));
+        tmp1 = _mm_xor_si128(tmp1, _mm_loadu_si128(&((__m128i*)c.constData())[i]));
         last_block = tmp1;
-        for(j=0; j<p.length() % 16; j++){
-            c_link[i*16 + j] = ((unsigned char*) &last_block)[j];
+        for(j=0; j<c.length() % 16; j++){
+            out_link[i*16 + j] = ((unsigned char*) &last_block)[j];
         }
-        for(j; j<16; j++){
-            ((unsigned char*) &last_block)[j] = 0;
-        }
-        tmp1 = _mm_shuffle_epi8(last_block, BSWAP_MASK);
-        X = _mm_xor_si128(X, tmp1);
-        X = gfmul_reflected(X, H);
     }
 
-    // 6. Final Tag
-    tmp1 = _mm_insert_epi64(tmp1, p.length()*8, 0);
-    tmp1 = _mm_insert_epi64(tmp1, aad.length()*8, 1);
-
-    X = _mm_xor_si128(X, tmp1);
-    X = gfmul_reflected(X, H);
-    X = _mm_shuffle_epi8(X, BSWAP_MASK);        // bring final GHASH state back to normal world
-    T = _mm_xor_si128(X, T);
-    _mm_storeu_si128((__m128i*)out.t.data(), T);
-
-    return out;
-*/
+    return true;
 }
 
 GCM_OUT encrypt_times_four(const QByteArray &key, const QByteArray &iv, const QByteArray &aad, const QByteArray &p){
@@ -1398,6 +1406,18 @@ void gcm_test(){
     } else{
         qInfo() << "Assertion ( \"T\" ): WRONG";
     }
+    QByteArray p_out;
+    bool dec_1_bool = decrypt(key, iv, a, out_test, p_out);
+    if (dec_1_bool){
+        qInfo() << "Tags match: OK";
+    } else{
+        qInfo() << "Tags match: WRONG";
+    }
+    if(p == p_out){
+        qInfo() << "Assertion ( \"P\" ):OK";
+    }else{
+        qInfo() << "Assertion ( \"P\" ): WRONG";
+    }
 
     GCM_OUT out_test2 = encrypt_times_four(key, iv, a, p);
     if(c_assert == out_test2.c){
@@ -1466,6 +1486,17 @@ void gcm_test(){
         qInfo() << "Assertion ( \"T\" ): OK";
     } else{
         qInfo() << "Assertion ( \"T\" ): WRONG";
+    }
+    dec_1_bool = decrypt(key, iv, a, out_test, p_out);
+    if (dec_1_bool){
+        qInfo() << "Tags match: OK";
+    } else{
+        qInfo() << "Tags match: WRONG";
+    }
+    if(p == p_out){
+        qInfo() << "Assertion ( \"P\" ):OK";
+    }else{
+        qInfo() << "Assertion ( \"P\" ): WRONG";
     }
 
     out_test2 = encrypt_times_four(key, iv, a, p);
@@ -1536,6 +1567,17 @@ void gcm_test(){
         qInfo() << "Assertion ( \"T\" ): OK";
     } else{
         qInfo() << "Assertion ( \"T\" ): WRONG";
+    }
+    dec_1_bool = decrypt(key, iv, a, out_test, p_out);
+    if (dec_1_bool){
+        qInfo() << "Tags match: OK";
+    } else{
+        qInfo() << "Tags match: WRONG";
+    }
+    if(p == p_out){
+        qInfo() << "Assertion ( \"P\" ): OK";
+    }else{
+        qInfo() << "Assertion ( \"P\" ): WRONG";
     }
 
     out_test2 = encrypt_times_four(key, iv, a, p);
