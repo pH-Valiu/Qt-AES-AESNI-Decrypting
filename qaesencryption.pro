@@ -26,7 +26,11 @@ QMAKE_CXXFLAGS += \
     -mavx512f \
     -mvpclmulqdq \
     -mavx512bw \
-    -march=native \
+    #-march=native \
+    -msse4.1 \      # for _mm_insert_epi32
+    -mssse3 \       # for _mm_shuffle_epi8
+    -msse2 \        # for _mm_add_epi32 and maybe other
+    -msse \         # for default compliancy for the other sse instruction sets
     #-masm=intel    ChatGPT says to not include this as it would only be needed for inline assembler but not for external files
 
 # You can also make your code fail to compile if you use deprecated APIs.

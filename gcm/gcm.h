@@ -29,8 +29,18 @@ struct GCM_OUT{
  * @return Will return an empty GCM_OUT struct if parameters do not adhere to required lengths
  */
 struct GCM_OUT encrypt(const QByteArray& key, const QByteArray& iv, const QByteArray& aad, const QByteArray& p);
-QByteArray decrypt(const QByteArray& key, const QByteArray& iv, const QByteArray& aad, const QByteArray& c, const QByteArray& t);
-QByteArray decrypt(const QByteArray& key, const QByteArray& iv, const QByteArray& aad, const struct GCM_OUT& gcm_out);
+/**
+ * @brief decrypt
+ * @param key
+ * @param iv
+ * @param aad
+ * @param c
+ * @param t
+ * @param out modifyable QByteArray in which the plaintext will be stored after decryption
+ * @return true if the authentication of the tag was correct, false if the tags do not match
+ */
+bool decrypt(const QByteArray& key, const QByteArray& iv, const QByteArray& aad, const QByteArray& c, const QByteArray& t, QByteArray& out);
+bool decrypt(const QByteArray& key, const QByteArray& iv, const QByteArray& aad, const struct GCM_OUT& gcm_out, QByteArray& out);
 bool authenticate(const QByteArray& aad, const QByteArray& c, const QByteArray& t);
 bool authenticate(const QByteArray& aad, const struct GCM_OUT& gcm_out);
 QByteArray random_iv();

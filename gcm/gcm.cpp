@@ -192,7 +192,138 @@ GCM_OUT encrypt(const QByteArray &key, const QByteArray &iv, const QByteArray &a
 }
 
 
+bool decrypt(const QByteArray &key, const QByteArray &iv, const QByteArray &aad, const QByteArray &c, const QByteArray &t, QByteArray &out){
+    return false;
+    /*
+    // 0.1: Check instruction set support
+    if(!(AES_GCM_Compatability::hasAES() && AES_GCM_Compatability::hasAVX2() && AES_GCM_Compatability::hasPCLMUL())) {
+        throw std::runtime_error("CPU does not support required AES-GCM instructions (AES-NI, PCLMUL, AVX2");
+    }
 
+    // 0.2: Check max lengths of paramteres following NIST specification (NIST 800-38d)
+    if(key.length() != gcm_keyLength || iv.isEmpty() || iv.length() > MAX_IV_LEN || aad.length() > MAX_AAD_LEN || p.length() > MAX_PLAIN_LEN) {
+        return GCM_OUT();
+    }
+
+    // 0.3: Key Expansion
+    AES_KEY aesKey;
+    AES_set_encrypt_key((unsigned char*) key.constData(), gcm_keyLengthBits, &aesKey);
+
+    // 0.4 Variable declarations
+    __m128i Y0, tmp1, H, T, ctr1;
+    __m128i last_block = ZERO;
+    __m128i X = ZERO;           // X is used for the running GHASH calculation state
+    unsigned int i, j;
+
+    GCM_OUT out;
+    out.c.resize(p.length());
+    out.t.resize(16);
+    char* c_link = out.c.data();
+
+    // 1: H = AES_k(0^128)
+    H = singleAESBlock(ZERO, aesKey);
+    H = _mm_shuffle_epi8(H, BSWAP_MASK);
+
+    // 2. IV Expansion
+    if(iv.length() == 12){
+        Y0 = _mm_loadu_si128((__m128i*) iv.constData());
+        Y0 = _mm_insert_epi32(Y0, 0x01000000, 3);       // this is such that in memory a0:| iv0, iv1, iv2, iv3, iv4, ..., iv11, iv12, 00, 00, 00, 01 |:a15
+    } else {        // We have to apply GHASH(IV||0^{remainingBytesForFullBlock}||0^32||iv.bitlength())
+        Y0 = ZERO;
+        for(i=0; i < iv.length()/16; i++){  // We do first all full 16 byte blocks
+            tmp1 = _mm_loadu_si128(&((__m128i*)iv.constData())[i]); // the _mm_loadu_si128 is necessary because iv might not be 16Byte aligned
+            tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
+            Y0 = _mm_xor_si128(Y0, tmp1);
+            Y0 = gfmul_reflected(Y0, H);
+        }
+        if(iv.length() % 16){
+            for(j=0; j < iv.length() % 16; j++)
+                ((unsigned char*)&last_block)[j] = iv[i*16+j];
+            tmp1 = last_block;
+            tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
+            Y0 = _mm_xor_si128(Y0, tmp1);
+            Y0 = gfmul_reflected(Y0, H);
+        }
+        tmp1 = _mm_insert_epi64(tmp1, iv.length()*8, 0);
+        tmp1 = _mm_insert_epi64(tmp1, 0, 1);
+        Y0 = _mm_xor_si128(Y0, tmp1);
+        Y0 = gfmul_reflected(Y0, H);
+        Y0 = _mm_shuffle_epi8(Y0, BSWAP_MASK);      // this brings it back into "normal" world
+    }
+
+    // 3. T_pre computation
+    T = singleAESBlock(Y0, aesKey);     // this will be xor-ed onto the full GHASH output to form the final tag
+
+    // 4. GHASH(aad)
+    for(i=0; i<aad.length()/16; i++){       // first apply GHASH on all full blocks
+        tmp1 = _mm_loadu_si128(&((__m128i*)aad.constData())[i]);    // the _mm_loadu_si128 is necessary because the data might not be 16Byte aligned
+        tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
+        X = _mm_xor_si128(X, tmp1);
+        X = gfmul_reflected(X, H);
+    }
+    if(aad.length() % 16){                  // apply GHASH on the remaining block if necessary
+        last_block = ZERO;
+        for(j=0; j<aad.length() % 16; j++){
+            ((unsigned char*) &last_block)[j] = aad[i*16 + j];
+        }
+        tmp1 = _mm_shuffle_epi8(last_block, BSWAP_MASK);
+        X = _mm_xor_si128(X, tmp1);
+        X = gfmul_reflected(X, H);
+    }
+
+    // 5. Ciphertext computation
+    ctr1 = Y0;
+    for(i=0; i<p.length() / 16; i++) {      // we traverse all **full** 16byte blocks of p
+        ctr1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
+        ctr1 = _mm_add_epi32(ctr1, ONE);                    // increase ctr1 <- ctr1 + 1
+        ctr1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
+
+        tmp1 = singleAESBlock(ctr1, aesKey);                // encrypt (j0 + 1) -> tmp1
+
+        // the _mm_loadu_si128 is necessary because the data might not be 16Byte aligned
+        tmp1 = _mm_xor_si128(tmp1, _mm_loadu_si128(&((__m128i*)p.constData())[i]));     // xor tmp1 with p block -> c block
+
+        // the _mm_store_si128 is necessary because the destination might not be 16Byte aligned
+        _mm_storeu_si128(&((__m128i*)c_link)[i], tmp1);           // store c block in out
+
+        tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);          // bring c block to reverse world
+
+        X = _mm_xor_si128(X, tmp1);
+        X = gfmul_reflected(X, H);                          // update GHASH state with currently computed ciphertext C
+    }
+    if(p.length() % 16){            // handle last block if necessary
+        ctr1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
+        ctr1 = _mm_add_epi32(ctr1, ONE);
+        ctr1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
+
+        tmp1 = singleAESBlock(ctr1, aesKey);     // encrypt (j0 + 1) -> tmp1
+
+        tmp1 = _mm_xor_si128(tmp1, _mm_loadu_si128(&((__m128i*)p.constData())[i]));
+        last_block = tmp1;
+        for(j=0; j<p.length() % 16; j++){
+            c_link[i*16 + j] = ((unsigned char*) &last_block)[j];
+        }
+        for(j; j<16; j++){
+            ((unsigned char*) &last_block)[j] = 0;
+        }
+        tmp1 = _mm_shuffle_epi8(last_block, BSWAP_MASK);
+        X = _mm_xor_si128(X, tmp1);
+        X = gfmul_reflected(X, H);
+    }
+
+    // 6. Final Tag
+    tmp1 = _mm_insert_epi64(tmp1, p.length()*8, 0);
+    tmp1 = _mm_insert_epi64(tmp1, aad.length()*8, 1);
+
+    X = _mm_xor_si128(X, tmp1);
+    X = gfmul_reflected(X, H);
+    X = _mm_shuffle_epi8(X, BSWAP_MASK);        // bring final GHASH state back to normal world
+    T = _mm_xor_si128(X, T);
+    _mm_storeu_si128((__m128i*)out.t.data(), T);
+
+    return out;
+*/
+}
 
 GCM_OUT encrypt_times_four(const QByteArray &key, const QByteArray &iv, const QByteArray &aad, const QByteArray &p){
     // 0.1: Check instruction set support
@@ -940,8 +1071,8 @@ GCM_OUT encrypt_times_four_ghash_times_four_parallelized(const QByteArray &key, 
 
 GCM_OUT encrypt_times_four_ghash_times_four_avx512(const QByteArray &key, const QByteArray &iv, const QByteArray &aad, const QByteArray &p){
     // 0.1: Check instruction set support
-    if(!(AES_GCM_Compatability::hasAES() && AES_GCM_Compatability::hasAVX2() && AES_GCM_Compatability::hasPCLMUL())) {
-        throw std::runtime_error("CPU does not support required AES-GCM instructions (AES-NI, PCLMUL, AVX2");
+    if(!(AES_GCM_Compatability::hasAES() && AES_GCM_Compatability::hasAVX2() && AES_GCM_Compatability::hasPCLMUL() && AES_GCM_Compatability::hasAVX512())) {
+        throw std::runtime_error("CPU does not support required AES-GCM instructions (AES-NI, PCLMUL, AVX2, AVX512");
     }
 
     // 0.2: Check max lengths of paramteres following NIST specification (NIST 800-38d)
@@ -1459,11 +1590,11 @@ void gcm_test(){
     QByteArray iv_t = BenchmarkUtil::randQByteArray(128, 96);
     QByteArray a_t = BenchmarkUtil::randQByteArray(500, 250);
     QByteArray p_t = BenchmarkUtil::randQByteArray(2000, 700);
-    BenchmarkUtil::runEncryptBenchmark("Normal_Encrypt_Single", encrypt, key, iv_t, a_t, p_t);
-    BenchmarkUtil::runEncryptBenchmark("Normal_Encrypt_Times_Four", encrypt_times_four, key, iv_t, a_t, p_t);
-    BenchmarkUtil::runEncryptBenchmark("Reduce_Four_Encrypt_Times_Four", encrypt_times_four_ghash_times_four, key, iv_t, a_t, p_t);
-    BenchmarkUtil::runEncryptBenchmark("Reduce_Strided_Encrypt_Parallelized", encrypt_times_four_ghash_times_four_parallelized, key, iv_t, a_t, p_t);
-    BenchmarkUtil::runEncryptBenchmark("Reduce_Strided_Encrypt_AVX512_SIMD", encrypt_times_four_ghash_times_four_avx512, key, iv_t, a_t, p_t);
+    //BenchmarkUtil::runEncryptBenchmark("Normal_Encrypt_Single", encrypt, key, iv_t, a_t, p_t);
+    //BenchmarkUtil::runEncryptBenchmark("Normal_Encrypt_Times_Four", encrypt_times_four, key, iv_t, a_t, p_t);
+    //BenchmarkUtil::runEncryptBenchmark("Reduce_Four_Encrypt_Times_Four", encrypt_times_four_ghash_times_four, key, iv_t, a_t, p_t);
+    //BenchmarkUtil::runEncryptBenchmark("Reduce_Strided_Encrypt_Parallelized", encrypt_times_four_ghash_times_four_parallelized, key, iv_t, a_t, p_t);
+    //BenchmarkUtil::runEncryptBenchmark("Reduce_Strided_Encrypt_AVX512_SIMD", encrypt_times_four_ghash_times_four_avx512, key, iv_t, a_t, p_t);
 }
 
 void encrypt(){
