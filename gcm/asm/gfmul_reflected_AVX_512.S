@@ -38,6 +38,7 @@ Q_r_512_asm:
 
 .text
 .intel_syntax noprefix
+.global avx512_xor_si512_asm
 .global gfmul_reflected_avx512_512
 .global gfmul_reflected_avx512_128
 
@@ -45,6 +46,17 @@ Q_r_512_asm:
 .type gfmul_reflected_avx512_512, @function
 .type gfmul_reflected_avx512_128, @function
 #endif
+
+avx512_xor_si512_asm:
+    # expect rcx -> &a, rdx -> &b
+    # expect rcx -> &result
+    vmovdqu64 zmm0, [rcx]
+    vmovdqu64 zmm1, [rdx]
+
+    vpxord zmm0, zmm0, zmm1
+
+    vmovdqu64 [rcx], zmm0
+    ret
 
 # This is faster than gfmul_reflected_avx128 because it uses AVX-512 instructions
 gfmul_reflected_avx512_128:

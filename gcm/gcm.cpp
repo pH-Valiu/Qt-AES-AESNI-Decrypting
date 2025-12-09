@@ -9,6 +9,10 @@
 #include <qaesencryption.h>
 #include <QDebug>
 #include <QString>
+
+extern "C" void gfmul_reflected_avx512_512(const __m512i* a, const __m512i* b, const __m512i* res);
+extern "C" void avx512_xor_si512_asm(__m512i* a, const __m512i* b);
+
 static inline void assert_m128(__m128i a, __m128i a_assert, const QString& name)
 {
     __m128i diff = _mm_xor_si128(a, a_assert);
@@ -852,16 +856,16 @@ GCM_OUT encrypt_times_four_ghash_times_four_parallelized(const QByteArray &key, 
     int num_threads = 4;        // std::thread::hardware_capability
     __m128i H_keys[4] = {H, H2, H3, H4};   // must be adapted to num_threads
     __m128i X_out[num_threads] = {ZERO, ZERO, ZERO, ZERO};
-    //std::thread threads[num_threads];
+    std::thread threads[num_threads];
     for(int m=0; m<num_threads; m++){
-        encrypt_and_ghash_worker(m, &aesKey, (__m128i*) H_keys, Y0, p.constData(), p.length(), X, c_link, (__m128i*) X_out);
-        //threads[m] = std::thread(encrypt_and_ghash_worker, m, &aesKey, H_keys, Y0, p.constData(), p.length(), X, c_link, (__m128i*) X_out);
+        //encrypt_and_ghash_worker(m, &aesKey, (__m128i*) H_keys, Y0, p.constData(), p.length(), X, c_link, (__m128i*) X_out);
+        threads[m] = std::thread(encrypt_and_ghash_worker, m, &aesKey, H_keys, Y0, p.constData(), p.length(), X, c_link, (__m128i*) X_out);
     }
 
     // We must reset the global X to ZERO because the X_prev is already incorporated inside X_out[0]
     X = ZERO;
     for(int m=0; m<num_threads; m++){
-        //threads[m].join();
+        threads[m].join();
         X = _mm_xor_si128(X, X_out[m]);
     }
 
@@ -1054,11 +1058,24 @@ GCM_OUT encrypt_times_four_ghash_times_four_avx512(const QByteArray &key, const 
     //qInfo()<<"[Encrypt_times_four_ghash_Times_four] X after aad:"<<print128_hex_lanes(X);
 
     // 4. Ciphertext computation
+    // because our gfmul_reflected_avx512 method takes in C1, C2, C3, C4 at the same time
     ctr1 = _mm_shuffle_epi8(Y0, BSWAP_EPI64_MASK);
     ctr1 = _mm_add_epi32(ctr1, ONE);
     ctr2 = _mm_add_epi32(ctr1, ONE);
     ctr3 = _mm_add_epi32(ctr2, ONE);
     ctr4 = _mm_add_epi32(ctr3, ONE);
+    Conv512 conv;
+    conv.x[0] = H4;
+    conv.x[1] = H4;
+    conv.x[2] = H4;
+    conv.x[3] = H4;
+    __m512i h4_avx512 = conv.z;
+    conv.x[0] = H4;
+    conv.x[1] = H3;
+    conv.x[2] = H2;
+    conv.x[3] = H;
+    __m512i h4h3h2h1_avx512 = conv.z;
+    __m512i gfmul_result;       // if this is spilled on the stack, we must either do full assembly, or store in __m128i again
     for(i=0; i<p.length() / 16 / 4; i++) {      // process four full blocks at once
         tmp1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
         tmp2 = _mm_shuffle_epi8(ctr2, BSWAP_EPI64_MASK);
@@ -1114,9 +1131,40 @@ GCM_OUT encrypt_times_four_ghash_times_four_avx512(const QByteArray &key, const 
         tmp3 = _mm_shuffle_epi8(tmp3, BSWAP_MASK);
         tmp4 = _mm_shuffle_epi8(tmp4, BSWAP_MASK);
 
-        tmp1 = _mm_xor_si128(X, tmp1);
-        X = gfmul_times_four_reflected(tmp4, tmp3, tmp2, tmp1, H, H2, H3, H4);
+        if(i==0){   // apply X_prev in the first round on tmp1
+            tmp1 = _mm_xor_si128(X, tmp1);
+        }
+
+        // bring ciphers into __m512i
+        conv.x[0] = tmp1;
+        conv.x[1] = tmp2;
+        conv.x[2] = tmp3;
+        conv.x[3] = tmp4;
+        __m512i ciphers_avx512 = conv.z;
+
+        if(i!=0){   // apply the GFMUL_RESULT_prev on the avx512 register on all 4 avx128 fields in all rounds but the first one
+            avx512_xor_si512_asm(&ciphers_avx512, &gfmul_result);
+        }
+
+
+        // apply the ghash_avx512_512 algorithm using {H4, H4, H4, H4} in all rounds but the last one {H4, H3, H2, H1}
+        if (i+1 == p.length() / 16 / 4) {   // is last round?
+            gfmul_reflected_avx512_512(&ciphers_avx512, &h4h3h2h1_avx512, &gfmul_result);
+
+            // now all four avx128 need to be xored together
+            conv.z = gfmul_result;
+            tmp1 = conv.x[0];
+            tmp2 = conv.x[1];
+            tmp3 = conv.x[2];
+            tmp4 = conv.x[3];
+            X = _mm_xor_si128(tmp1, tmp2);
+            X = _mm_xor_si128(X, tmp3);
+            X = _mm_xor_si128(X, tmp4);
+        } else {
+            gfmul_reflected_avx512_512(&ciphers_avx512, &h4_avx512, &gfmul_result);
+        }
     }
+
 
     for(k = i*4; k < p.length()/16; k++){       // handle last full blocks
         tmp1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
@@ -1234,6 +1282,18 @@ void gcm_test(){
     } else{
         qInfo() << "Assertion ( \"T\" ): WRONG";
     }
+
+    GCM_OUT out_test5 = encrypt_times_four_ghash_times_four_avx512(key, iv, a, p);
+    if(c_assert == out_test5.c){
+        qInfo() << "Assertion ( \"C\" ): OK";
+    } else{
+        qInfo() << "Assertion ( \"C\" ): WRONG";
+    }
+    if(t_assert == out_test5.t){
+        qInfo() << "Assertion ( \"T\" ): OK";
+    } else{
+        qInfo() << "Assertion ( \"T\" ): WRONG";
+    }
     qInfo()<<"---------------------------";
 
     // This is Test 6 from revised NIST
@@ -1287,6 +1347,18 @@ void gcm_test(){
         qInfo() << "Assertion ( \"C\" ): WRONG";
     }
     if(t_assert == out_test4.t){
+        qInfo() << "Assertion ( \"T\" ): OK";
+    } else{
+        qInfo() << "Assertion ( \"T\" ): WRONG";
+    }
+
+    out_test5 = encrypt_times_four_ghash_times_four_avx512(key, iv, a, p);
+    if(c_assert == out_test5.c){
+        qInfo() << "Assertion ( \"C\" ): OK";
+    } else{
+        qInfo() << "Assertion ( \"C\" ): WRONG";
+    }
+    if(t_assert == out_test5.t){
         qInfo() << "Assertion ( \"T\" ): OK";
     } else{
         qInfo() << "Assertion ( \"T\" ): WRONG";
@@ -1345,6 +1417,18 @@ void gcm_test(){
         qInfo() << "Assertion ( \"C\" ): WRONG";
     }
     if(t_assert == out_test4.t){
+        qInfo() << "Assertion ( \"T\" ): OK";
+    } else{
+        qInfo() << "Assertion ( \"T\" ): WRONG";
+    }
+
+    out_test5 = encrypt_times_four_ghash_times_four_avx512(key, iv, a, p);
+    if(c_assert == out_test5.c){
+        qInfo() << "Assertion ( \"C\" ): OK";
+    } else{
+        qInfo() << "Assertion ( \"C\" ): WRONG";
+    }
+    if(t_assert == out_test5.t){
         qInfo() << "Assertion ( \"T\" ): OK";
     } else{
         qInfo() << "Assertion ( \"T\" ): WRONG";

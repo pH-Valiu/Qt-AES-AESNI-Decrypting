@@ -1,7 +1,7 @@
 #ifndef GCM_H
 #define GCM_H
 
-#include "wmmintrin.h"
+#include "immintrin.h"
 #include <QString>
 #include <QByteArray>
 #include "aesni/aesni-key-init.h"
@@ -63,5 +63,11 @@ static __m128i BSWAP_EPI64_MASK = _mm_set_epi8(8, 9, 10, 11, 12, 13, 14, 15, 0, 
 static __m128i ONE = _mm_set_epi32(0, 1, 0, 0);
 static __m128i FOUR = _mm_set_epi32(0, 4, 0, 0);
 
+#ifdef AVX512_SUPPORT
+typedef alignas(64) union AVX512_converter {
+    __m512i z;
+    __m128i x[4];
+} Conv512;
+#endif
 
 #endif // GCM_H

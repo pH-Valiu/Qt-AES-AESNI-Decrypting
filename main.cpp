@@ -11,7 +11,7 @@ int main(int argc, char *argv[])
 {
     QCoreApplication a(argc, argv);
     gfmul_test();
-    //gcm_test();
+    gcm_test();
     //AesTest test1;
     //return QTest::qExec(&test1);
 

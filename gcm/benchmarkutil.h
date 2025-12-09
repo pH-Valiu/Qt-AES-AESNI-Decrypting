@@ -57,6 +57,11 @@ public:
                     int warmupIters = 20000,
                     int measureIters = 100000,
                     int perCallSamples = 200){
+
+        qInfo() << "====================================";
+        qInfo() << "Benchmarking:" << name;
+        qInfo() << "====================================";
+
         // Warm-up
         for (int i = 0; i < warmupIters; i++)
             func(fixedA, fixedB, resPtr);
