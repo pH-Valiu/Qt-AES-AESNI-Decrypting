@@ -11,6 +11,7 @@
 #include <QString>
 
 extern "C" void gfmul_reflected_avx512_512(const __m512i* a, const __m512i* b, const __m512i* res);
+extern "C" void gfmul_reflected_avx512_128(const __m128i* a, const __m128i* b, const __m128i* res);
 extern "C" void avx512_xor_si512_asm(__m512i* a, const __m512i* b);
 
 static inline void assert_m128(__m128i a, __m128i a_assert, const QString& name)
@@ -260,7 +261,8 @@ GCM_OUT encrypt_times_four(const QByteArray &key, const QByteArray &iv, const QB
             tmp1 = _mm_loadu_si128(&((__m128i*)iv.constData())[i]);
             tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
             Y0 = _mm_xor_si128(Y0, tmp1);
-            Y0 = gfmul_reflected(Y0, H);
+            gfmul_reflected_avx512_128(&Y0, &H, &Y0);
+            //Y0 = gfmul_reflected(Y0, H);
         }
         if(iv.length() % 16){
             for(j=0; j < iv.length() % 16; j++)
@@ -268,12 +270,14 @@ GCM_OUT encrypt_times_four(const QByteArray &key, const QByteArray &iv, const QB
             tmp1 = last_block;
             tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
             Y0 = _mm_xor_si128(Y0, tmp1);
-            Y0 = gfmul_reflected(Y0, H);
+            gfmul_reflected_avx512_128(&Y0, &H, &Y0);
+            //Y0 = gfmul_reflected(Y0, H);
         }
         tmp1 = _mm_insert_epi64(tmp1, iv.length()*8, 0);
         tmp1 = _mm_insert_epi64(tmp1, 0, 1);
         Y0 = _mm_xor_si128(Y0, tmp1);
-        Y0 = gfmul_reflected(Y0, H);
+        gfmul_reflected_avx512_128(&Y0, &H, &Y0);
+        //Y0 = gfmul_reflected(Y0, H);
         Y0 = _mm_shuffle_epi8(Y0, BSWAP_MASK);      // this brings it back into "normal" world
 
         // compute T_pre
@@ -291,7 +295,8 @@ GCM_OUT encrypt_times_four(const QByteArray &key, const QByteArray &iv, const QB
         tmp1 = _mm_loadu_si128(&((__m128i*)aad.constData())[i]);
         tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
         X = _mm_xor_si128(X, tmp1);
-        X = gfmul_reflected(X, H);
+        gfmul_reflected_avx512_128(&X, &H, &X);
+        //X = gfmul_reflected(X, H);
     }
     if(aad.length() % 16){                  // apply GHASH on the remaining block if necessary
         last_block = ZERO;
@@ -300,7 +305,8 @@ GCM_OUT encrypt_times_four(const QByteArray &key, const QByteArray &iv, const QB
         }
         tmp1 = _mm_shuffle_epi8(last_block, BSWAP_MASK);
         X = _mm_xor_si128(X, tmp1);
-        X = gfmul_reflected(X, H);
+        gfmul_reflected_avx512_128(&X, &H, &X);
+        //X = gfmul_reflected(X, H);
     }
 
     // 5. Ciphertext computation
@@ -357,13 +363,17 @@ GCM_OUT encrypt_times_four(const QByteArray &key, const QByteArray &iv, const QB
 
 
         X = _mm_xor_si128(X, tmp1);
-        X = gfmul_reflected(X, H);
+        gfmul_reflected_avx512_128(&X, &H, &X);
+        //X = gfmul_reflected(X, H);
         X = _mm_xor_si128(X, tmp2);
-        X = gfmul_reflected(X, H);
+        gfmul_reflected_avx512_128(&X, &H, &X);
+        //X = gfmul_reflected(X, H);
         X = _mm_xor_si128(X, tmp3);
-        X = gfmul_reflected(X, H);
+        gfmul_reflected_avx512_128(&X, &H, &X);
+        //X = gfmul_reflected(X, H);
         X = _mm_xor_si128(X, tmp4);
-        X = gfmul_reflected(X, H);
+        gfmul_reflected_avx512_128(&X, &H, &X);
+        //X = gfmul_reflected(X, H);
     }
     for(k = i*4; k < p.length()/16; k++){
         tmp1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
@@ -379,7 +389,8 @@ GCM_OUT encrypt_times_four(const QByteArray &key, const QByteArray &iv, const QB
         _mm_storeu_si128(&((__m128i*)c_link)[k], tmp1);
         tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
         X =_mm_xor_si128(X, tmp1);
-        X = gfmul_reflected(X, H);
+        gfmul_reflected_avx512_128(&X, &H, &X);
+        //X = gfmul_reflected(X, H);
     }
 
     if(p.length() % 16){            // handle last block if necessary
@@ -396,7 +407,8 @@ GCM_OUT encrypt_times_four(const QByteArray &key, const QByteArray &iv, const QB
         }
         tmp1 = _mm_shuffle_epi8(last_block, BSWAP_MASK);
         X = _mm_xor_si128(X, tmp1);
-        X = gfmul_reflected(X, H);
+        gfmul_reflected_avx512_128(&X, &H, &X);
+        //X = gfmul_reflected(X, H);
     }
 
     // 6. Final Tag
@@ -404,7 +416,8 @@ GCM_OUT encrypt_times_four(const QByteArray &key, const QByteArray &iv, const QB
     tmp1 = _mm_insert_epi64(tmp1, aad.length()*8, 1);
 
     X = _mm_xor_si128(X, tmp1);
-    X = gfmul_reflected(X, H);
+    gfmul_reflected_avx512_128(&X, &H, &X);
+    //X = gfmul_reflected(X, H);
     X = _mm_shuffle_epi8(X, BSWAP_MASK);        // bring final GHASH state back to normal world
     T = _mm_xor_si128(X, T);
     _mm_storeu_si128((__m128i*)out.t.data(), T);
@@ -856,16 +869,16 @@ GCM_OUT encrypt_times_four_ghash_times_four_parallelized(const QByteArray &key, 
     int num_threads = 4;        // std::thread::hardware_capability
     __m128i H_keys[4] = {H, H2, H3, H4};   // must be adapted to num_threads
     __m128i X_out[num_threads] = {ZERO, ZERO, ZERO, ZERO};
-    std::thread threads[num_threads];
+    //std::thread threads[num_threads];
     for(int m=0; m<num_threads; m++){
-        //encrypt_and_ghash_worker(m, &aesKey, (__m128i*) H_keys, Y0, p.constData(), p.length(), X, c_link, (__m128i*) X_out);
-        threads[m] = std::thread(encrypt_and_ghash_worker, m, &aesKey, H_keys, Y0, p.constData(), p.length(), X, c_link, (__m128i*) X_out);
+        encrypt_and_ghash_worker(m, &aesKey, (__m128i*) H_keys, Y0, p.constData(), p.length(), X, c_link, (__m128i*) X_out);
+        //threads[m] = std::thread(encrypt_and_ghash_worker, m, &aesKey, H_keys, Y0, p.constData(), p.length(), X, c_link, (__m128i*) X_out);
     }
 
     // We must reset the global X to ZERO because the X_prev is already incorporated inside X_out[0]
     X = ZERO;
     for(int m=0; m<num_threads; m++){
-        threads[m].join();
+        //threads[m].join();
         X = _mm_xor_si128(X, X_out[m]);
     }
 
@@ -1024,6 +1037,9 @@ GCM_OUT encrypt_times_four_ghash_times_four_avx512(const QByteArray &key, const 
     H2 = gfmul_reflected(H, H);
     H3 = gfmul_reflected(H2, H);
     H4 = gfmul_reflected(H3, H);
+    //gfmul_reflected_avx512_128(&H, &H, &H2);
+    //gfmul_reflected_avx512_128(&H2, &H, &H3);
+    //gfmul_reflected_avx512_128(&H3, &H, &H4);
 
     // 3. GHASH(aad)
     for(i=0; i<aad.length() / 16 / 4; i++){     // apply GHASH on four blocks a time
@@ -1045,6 +1061,7 @@ GCM_OUT encrypt_times_four_ghash_times_four_avx512(const QByteArray &key, const 
         tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
         X = _mm_xor_si128(X, tmp1);
         X = gfmul_reflected(X, H);
+        //gfmul_reflected_avx512_128(&X, &H, &X);
     }
     if(aad.length() % 16){                  // apply GHASH on the remaining block if necessary
         last_block = ZERO;
@@ -1054,6 +1071,7 @@ GCM_OUT encrypt_times_four_ghash_times_four_avx512(const QByteArray &key, const 
         tmp1 = _mm_shuffle_epi8(last_block, BSWAP_MASK);
         X = _mm_xor_si128(X, tmp1);
         X = gfmul_reflected(X, H);
+        //gfmul_reflected_avx512_128(&X, &H, &X);
     }
     //qInfo()<<"[Encrypt_times_four_ghash_Times_four] X after aad:"<<print128_hex_lanes(X);
 
@@ -1181,6 +1199,7 @@ GCM_OUT encrypt_times_four_ghash_times_four_avx512(const QByteArray &key, const 
         tmp1 = _mm_shuffle_epi8(tmp1, BSWAP_MASK);
         X =_mm_xor_si128(X, tmp1);
         X = gfmul_reflected(X, H);
+        //gfmul_reflected_avx512_128(&X, &H, &X);
     }
     if(p.length() % 16){            // handle last unfull block if necessary
         ctr1 = _mm_shuffle_epi8(ctr1, BSWAP_EPI64_MASK);
@@ -1197,6 +1216,7 @@ GCM_OUT encrypt_times_four_ghash_times_four_avx512(const QByteArray &key, const 
         tmp1 = _mm_shuffle_epi8(last_block, BSWAP_MASK);
         X = _mm_xor_si128(X, tmp1);
         X = gfmul_reflected(X, H);
+        //gfmul_reflected_avx512_128(&X, &H, &X);
     }
 
     // 5. Final Tag
@@ -1205,6 +1225,7 @@ GCM_OUT encrypt_times_four_ghash_times_four_avx512(const QByteArray &key, const 
 
     X = _mm_xor_si128(X, tmp1);
     X = gfmul_reflected(X, H);
+    //gfmul_reflected_avx512_128(&X, &H, &X);
     X = _mm_shuffle_epi8(X, BSWAP_MASK);        // bring final GHASH state back to normal world
     T = _mm_xor_si128(X, T);
     _mm_storeu_si128((__m128i*)out.t.data(), T);
@@ -1438,10 +1459,11 @@ void gcm_test(){
     QByteArray iv_t = BenchmarkUtil::randQByteArray(128, 96);
     QByteArray a_t = BenchmarkUtil::randQByteArray(500, 250);
     QByteArray p_t = BenchmarkUtil::randQByteArray(2000, 700);
-    //BenchmarkUtil::runEncryptBenchmark("Normal_Encrypt_Single", encrypt, key, iv_t, a_t, p_t);
-    //BenchmarkUtil::runEncryptBenchmark("Normal_Encrypt_Times_Four", encrypt_times_four, key, iv_t, a_t, p_t);
-    //BenchmarkUtil::runEncryptBenchmark("Reduce_Four_Encrypt_Times_Four", encrypt_times_four_ghash_times_four, key, iv_t, a_t, p_t);
-    //BenchmarkUtil::runEncryptBenchmark("Reduce_Strided_Encrypt_Parallelized", encrypt_times_four_ghash_times_four_parallelized, key, iv_t, a_t, p_t);
+    BenchmarkUtil::runEncryptBenchmark("Normal_Encrypt_Single", encrypt, key, iv_t, a_t, p_t);
+    BenchmarkUtil::runEncryptBenchmark("Normal_Encrypt_Times_Four", encrypt_times_four, key, iv_t, a_t, p_t);
+    BenchmarkUtil::runEncryptBenchmark("Reduce_Four_Encrypt_Times_Four", encrypt_times_four_ghash_times_four, key, iv_t, a_t, p_t);
+    BenchmarkUtil::runEncryptBenchmark("Reduce_Strided_Encrypt_Parallelized", encrypt_times_four_ghash_times_four_parallelized, key, iv_t, a_t, p_t);
+    BenchmarkUtil::runEncryptBenchmark("Reduce_Strided_Encrypt_AVX512_SIMD", encrypt_times_four_ghash_times_four_avx512, key, iv_t, a_t, p_t);
 }
 
 void encrypt(){

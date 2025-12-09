@@ -197,6 +197,7 @@ public:
         }
 
         double cpuGHz = calibratedCPUGHz();
+        qInfo() << "CPU freq. (GHz):"<<cpuGHz;
         QVector<quint64> rawNs;
         rawNs.reserve(singleTimes.size());
         for (quint64 c : singleTimes) rawNs.append(quint64(c / cpuGHz));
@@ -254,6 +255,7 @@ public:
         }
 
         double cpuGHz = calibratedCPUGHz();
+        qInfo() << "CPU freq. (GHz):"<<cpuGHz;
         QVector<quint64> rawNs;
         rawNs.reserve(singleTimes.size());
         for (quint64 c : singleTimes) rawNs.append(quint64(c / cpuGHz));
