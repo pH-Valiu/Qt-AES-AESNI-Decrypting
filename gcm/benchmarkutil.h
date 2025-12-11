@@ -147,11 +147,6 @@ public:
                                        const QByteArray &iv,
                                        const QByteArray &aad,
                                        const QByteArray &plaintext);
-    using DecryptFunc = QByteArray(*)(const QByteArray &key,
-                                       const QByteArray &iv,
-                                       const QByteArray &aad,
-                                       const QByteArray &ciphertext,
-                                       const QByteArray &tag);
 
     static void runEncryptBenchmark(const QString &name,
                                     EncryptFunc func,
@@ -192,64 +187,6 @@ public:
             QByteArray t4 = randQByteArray(512, 128);
             quint64 start = __rdtsc();
             func(t1, t2, t3, t4);
-            quint64 end = __rdtsc();
-            singleTimes.append(end - start);
-        }
-
-        double cpuGHz = calibratedCPUGHz();
-        qInfo() << "CPU freq. (GHz):"<<cpuGHz;
-        QVector<quint64> rawNs;
-        rawNs.reserve(singleTimes.size());
-        for (quint64 c : singleTimes) rawNs.append(quint64(c / cpuGHz));
-
-        qInfo() << "--------- Block measurement ---------";
-        printStats(blockStats);
-        qInfo() << "--------- Per-call timing ---------";
-        printStats(computeStats(singleTimes));
-        printHistogramRaw(rawNs, "Per-call histogram (ns)");
-    }
-
-    static void runDecryptBenchmark(const QString &name,
-                                    DecryptFunc func,
-                                    const QByteArray &key,
-                                    const QByteArray &iv,
-                                    const QByteArray &aad,
-                                    const QByteArray &ciphertext,
-                                    const QByteArray &tag,
-                                    int warmupIters = 2000,
-                                    int measureIters = 10000,
-                                    int perCallSamples = 200)
-    {
-        qInfo() << "Benchmarking decrypt:" << name;
-
-        // Warm-up
-        for (int i = 0; i < warmupIters; i++)
-            func(key, iv, aad, ciphertext, tag);
-
-        // Block measurement
-        QVector<quint64> blockTimes;
-        blockTimes.reserve(20);
-        for (int s = 0; s < 20; s++) {
-            quint64 start = __rdtsc();
-            for (int i = 0; i < measureIters; i++)
-                func(key, iv, aad, ciphertext, tag);
-            quint64 end = __rdtsc();
-            blockTimes.append((end - start) / measureIters);
-        }
-        Stats blockStats = computeStats(blockTimes);
-
-        // Per-call measurement
-        QVector<quint64> rawCycles;
-        QVector<quint64> singleTimes;
-        singleTimes.reserve(perCallSamples);
-        for (int i = 0; i < perCallSamples; i++) {
-            QByteArray t1 = randomize(key);
-            QByteArray t2 = randQByteArray(256, 96);
-            QByteArray t3 = randQByteArray(256, 50);
-            QByteArray t4 = randQByteArray(512, 128);
-            QByteArray t5 = randomize(tag);
-            quint64 start = __rdtsc();
-            func(t1, t2, t3, t4, t5);
             quint64 end = __rdtsc();
             singleTimes.append(end - start);
         }

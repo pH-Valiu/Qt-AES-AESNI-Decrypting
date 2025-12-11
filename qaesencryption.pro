@@ -26,6 +26,9 @@ QMAKE_CXXFLAGS += \
     -mavx512f \
     -mvpclmulqdq \
     -mavx512bw \
+    -mavx512dq \
+    -mavx512vl \
+    -mvaes \
     #-march=native \
     -msse4.1 \      # for _mm_insert_epi32
     -mssse3 \       # for _mm_shuffle_epi8
@@ -53,6 +56,7 @@ HEADERS += \
 SOURCES += main.cpp \
     gcm/asm/gfmul_reflected_AVX_512.S \
     gcm/asm/gfmul_reflected_SSE.S \
+    gcm/asm/gcm_AVX_512.S \
     gcm/gcm.cpp \
     gcm/gfmul.cpp \
     qaesencryption.cpp \
